@@ -1,0 +1,11 @@
+{
+  "domain": "mesh_solar",
+  "name": "Mesh Solar",
+  "codeowners": ["@seesharpsteve"],
+  "config_flow": true,
+  "documentation": "https://github.com/seesharpsteve/ha_mesh_solar#readme",
+  "integration_type": "service",
+  "iot_class": "cloud_polling",
+  "issue_tracker": "https://github.com/seesharpsteve/ha_mesh_solar/issues",
+  "version": "1.9.0"
+}

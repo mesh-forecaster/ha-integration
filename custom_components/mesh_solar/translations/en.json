@@ -1,0 +1,51 @@
+{
+  "title": "Mesh Solar",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Mesh Solar",
+        "description": "Configure your Mesh Solar API connection.",
+        "data": {
+          "url": "Forecast URL",
+          "api_key": "API key",
+          "battery_capacity_sensor": "Battery capacity sensor",
+          "environment": "Environment",
+          "hash": "Forecast hash",
+          "registration_data": "Registration data"
+        },
+        "data_description": {
+          "url": "Forecast endpoint URL.",
+          "api_key": "API key sent as X-API-KEY.",
+          "battery_capacity_sensor": "Entity ID that provides current battery capacity.",
+          "environment": "Use Live or Sandbox.",
+          "hash": "Deterministic result of the most recent forecast.",
+          "registration_data": "Registration data for your site. Used to avoid constant database reloads. Refreshes daily or when force-refreshed by the clear registration button."
+        }
+      }
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Mesh Solar settings",
+        "description": "Edit Mesh Solar connection values and cached tokens.",
+        "data": {
+          "url": "Forecast URL",
+          "api_key": "API key",
+          "battery_capacity_sensor": "Battery capacity sensor",
+          "environment": "Environment",
+          "hash": "Forecast hash",
+          "registration_data": "Registration data"
+        },
+        "data_description": {
+          "url": "Forecast endpoint URL.",
+          "api_key": "API key sent as X-API-KEY.",
+          "battery_capacity_sensor": "Entity ID that provides current battery capacity.",
+          "environment": "Use Live or Sandbox.",
+          "hash": "Deterministic result of the most recent forecast.",
+          "registration_data": "Registration data for your site. Used to avoid constant database reloads. Refreshes daily or when force-refreshed by the clear registration button."
+        }
+      }
+    }
+  }
+}
