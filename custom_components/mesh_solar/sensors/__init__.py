@@ -1,13 +1,26 @@
+from __future__ import annotations
+
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
+
 from ..const import DEFAULT_ENVIRONMENT, DOMAIN
-from .helpers import normalized
+from ..entity_helpers import normalized_environment
 from .monetary import MonetarySensor
 from .diagnostic import ForecastDetailSensor
 from .bms_state import BatteryManagementSystemStateSensor
 
 
-async def async_setup_entry(hass, config_entry, async_add_entities):
+async def async_setup_entry(
+    hass: HomeAssistant,
+    config_entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Mesh Solar sensor entities."""
     coordinator = hass.data[DOMAIN][config_entry.entry_id]
-    environment = normalized(getattr(coordinator, "environment", DEFAULT_ENVIRONMENT))
+    environment = normalized_environment(
+        getattr(coordinator, "environment", DEFAULT_ENVIRONMENT)
+    )
 
     async_add_entities(
         [
@@ -17,7 +30,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                 environment,
                 name_suffix="Total Cost",
                 unique_suffix="total_cost",
-                keys=("TotalCost", "totalCost", "total_cost"),
+                value_field="total_cost",
             ),
             MonetarySensor(
                 coordinator,
@@ -25,7 +38,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                 environment,
                 name_suffix="Charging Cost",
                 unique_suffix="charging_cost",
-                keys=("ChargingCost", "chargingCost", "charging_cost"),
+                value_field="charging_cost",
             ),
             MonetarySensor(
                 coordinator,
@@ -33,7 +46,7 @@ async def async_setup_entry(hass, config_entry, async_add_entities):
                 environment,
                 name_suffix="Saving",
                 unique_suffix="saving",
-                keys=("Saving", "saving", "savings"),
+                value_field="saving",
             ),
             ForecastDetailSensor(
                 coordinator,

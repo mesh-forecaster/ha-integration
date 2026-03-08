@@ -1,6 +1,11 @@
 {
   "title": "Mesh Solar",
   "config": {
+    "error": {
+      "invalid_url": "Enter a valid HTTP or HTTPS URL.",
+      "invalid_entity_id": "Enter a valid entity ID.",
+      "required": "This field is required."
+    },
     "step": {
       "user": {
         "title": "Mesh Solar",
@@ -25,6 +30,11 @@
     }
   },
   "options": {
+    "error": {
+      "invalid_url": "Enter a valid HTTP or HTTPS URL.",
+      "invalid_entity_id": "Enter a valid entity ID.",
+      "required": "This field is required."
+    },
     "step": {
       "init": {
         "title": "Mesh Solar settings",

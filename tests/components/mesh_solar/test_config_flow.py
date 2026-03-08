@@ -98,3 +98,49 @@ async def test_options_flow_updates_entry_data_and_clears_duplicate_options(hass
         CONF_REGISTRATION_DATA: "new-registration",
     }
     assert entry.options == {}
+
+
+async def test_user_flow_rejects_invalid_url(hass) -> None:
+    """The user flow validates forecast URLs."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_USER},
+    )
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_URL: "not-a-url",
+            CONF_API_KEY: "api-key",
+            CONF_BATTERY_CAPACITY_SENSOR: "sensor.battery_capacity",
+            CONF_ENVIRONMENT: DEFAULT_ENVIRONMENT_LABEL,
+            CONF_HASH: "",
+            CONF_REGISTRATION_DATA: "",
+        },
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {CONF_URL: "invalid_url"}
+
+
+async def test_user_flow_rejects_invalid_entity_id(hass) -> None:
+    """The user flow validates the battery capacity entity ID."""
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN,
+        context={"source": config_entries.SOURCE_USER},
+    )
+
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        user_input={
+            CONF_URL: "https://example.com/api/Forecast_Get?code=user-code",
+            CONF_API_KEY: "api-key",
+            CONF_BATTERY_CAPACITY_SENSOR: "not an entity",
+            CONF_ENVIRONMENT: DEFAULT_ENVIRONMENT_LABEL,
+            CONF_HASH: "",
+            CONF_REGISTRATION_DATA: "",
+        },
+    )
+
+    assert result["type"] == FlowResultType.FORM
+    assert result["errors"] == {CONF_BATTERY_CAPACITY_SENSOR: "invalid_entity_id"}

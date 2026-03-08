@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
-from typing import Any
 
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.typing import StateType
 from homeassistant.util import dt as dt_util
 
 from ..entity import MeshSolarEntity
-from .helpers import build_unique_id, display_suffix, environment_label, normalized
+from ..entity_helpers import (
+    build_unique_id,
+    display_suffix,
+    environment_label,
+    normalized_environment,
+)
+from ..models import ForecastPeriod
 
 
 class BatteryManagementSystemStateSensor(MeshSolarEntity, SensorEntity):
@@ -18,7 +23,7 @@ class BatteryManagementSystemStateSensor(MeshSolarEntity, SensorEntity):
 
     def __init__(self, coordinator, entry_id: str, environment: str) -> None:
         super().__init__(coordinator)
-        self._environment = normalized(environment)
+        self._environment = normalized_environment(environment)
         self._attr_name = f"Mesh Solar BMS State{display_suffix(self._environment)}"
         self._attr_unique_id = build_unique_id(
             self._environment, entry_id, "bms_state"
@@ -26,37 +31,36 @@ class BatteryManagementSystemStateSensor(MeshSolarEntity, SensorEntity):
 
     @property
     def native_value(self) -> StateType:
+        """Return the BMS state from the forecast or active period."""
         forecast_state = self._extract_forecast_state()
         if forecast_state is not None:
             return forecast_state
+
         period, _ = self._select_relevant_period()
-        if not period:
+        if period is None:
             return None
-        value = (
-            period.get("battery_management_system_state")
-            or period.get("batteryManagementSystemState")
-            or period.get("bms_state")
-        )
+
+        value = period.get("battery_management_system_state")
         if value in (None, ""):
             return None
         return str(value).strip()
 
     @property
-    def extra_state_attributes(self) -> dict[str, Any]:
+    def extra_state_attributes(self) -> dict[str, object]:
+        """Return attributes for the selected forecast period."""
         period, start = self._select_relevant_period()
-        attrs: dict[str, Any] = {
+        attrs: dict[str, object] = {
             "environment": environment_label(self._environment),
         }
         forecast_state = self._extract_forecast_state()
         if forecast_state not in (None, ""):
             attrs["forecast_state"] = forecast_state
-        if not period:
+        if period is None:
             return attrs
 
-        if start:
+        if start is not None:
             attrs["period_start"] = start.isoformat()
-            end = start + self._period_duration
-            attrs["period_end"] = end.isoformat()
+            attrs["period_end"] = (start + self._period_duration).isoformat()
 
         for key in (
             "id",
@@ -74,52 +78,50 @@ class BatteryManagementSystemStateSensor(MeshSolarEntity, SensorEntity):
 
         return attrs
 
-    def _select_relevant_period(self) -> tuple[dict[str, Any] | None, datetime | None]:
+    def _select_relevant_period(
+        self,
+    ) -> tuple[ForecastPeriod | None, datetime | None]:
         periods = self._extract_periods()
         if not periods:
             return None, None
 
         now = dt_util.utcnow()
-        current: dict[str, Any] | None = None
+        current_period: ForecastPeriod | None = None
         current_start: datetime | None = None
-        upcoming: dict[str, Any] | None = None
+        upcoming_period: ForecastPeriod | None = None
         upcoming_start: datetime | None = None
 
         for period in periods:
-            if not isinstance(period, dict):
-                continue
-            start_raw = period.get("date")
-            start = self._parse_datetime(start_raw)
+            start = self._parse_datetime(period.get("date"))
             if start is None:
                 continue
             if start <= now < start + self._period_duration:
                 if current_start is None or start > current_start:
-                    current = period
+                    current_period = period
                     current_start = start
             elif start > now:
                 if upcoming_start is None or start < upcoming_start:
-                    upcoming = period
+                    upcoming_period = period
                     upcoming_start = start
             elif start <= now and current_start is None:
-                current = period
+                current_period = period
                 current_start = start
 
-        if current:
-            return current, current_start
-        if upcoming:
-            return upcoming, upcoming_start
+        if current_period is not None:
+            return current_period, current_start
+        if upcoming_period is not None:
+            return upcoming_period, upcoming_start
 
         return None, None
 
-    def _extract_periods(self) -> list[dict]:
-        forecast = getattr(self.coordinator, "forecast", None)
-        periods = forecast.get("periods") if isinstance(forecast, dict) else None
-        if not isinstance(periods, list) or not periods:
-            periods = getattr(self.coordinator, "forecast_periods", None) or []
-        return periods
+    def _extract_periods(self) -> list[ForecastPeriod]:
+        snapshot = self.snapshot
+        if snapshot is None:
+            return []
+        return snapshot.forecast_periods
 
     @staticmethod
-    def _parse_datetime(value: Any) -> datetime | None:
+    def _parse_datetime(value: object) -> datetime | None:
         if value in (None, ""):
             return None
         if isinstance(value, datetime):
@@ -132,14 +134,10 @@ class BatteryManagementSystemStateSensor(MeshSolarEntity, SensorEntity):
         return dt_util.as_utc(parsed)
 
     def _extract_forecast_state(self) -> StateType:
-        forecast = getattr(self.coordinator, "forecast", None)
-        if not isinstance(forecast, dict):
+        snapshot = self.snapshot
+        if snapshot is None:
             return None
-        value = forecast.get("battery_management_system_state")
-        if value in (None, ""):
-            value = forecast.get("BatteryManagementSystemState") or forecast.get(
-                "batteryManagementSystemState"
-            )
+        value = snapshot.forecast.get("battery_management_system_state")
         if value in (None, ""):
             return None
         return str(value).strip()

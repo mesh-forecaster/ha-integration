@@ -1,4 +1,4 @@
-from typing import Optional
+from homeassistant.const import Platform
 
 DOMAIN = "mesh_solar"
 
@@ -12,10 +12,22 @@ DEFAULT_ENVIRONMENT = ""
 DEFAULT_ENVIRONMENT_LABEL = "Live"
 SANDBOX_ENVIRONMENT = "Sandbox"
 LEGACY_LIVE_ENVIRONMENT = "Live"
+DEFAULT_TITLE = "Mesh Solar"
+DEFAULT_FORECAST_URL = (
+    "https://meshsolar-production-faf.azurewebsites.net/api/Forecast_Get?code="
+)
+DEFAULT_API_KEY = ""
+DEFAULT_BATTERY_CAPACITY_SENSOR = "sensor.battery_capacity"
 UPDATE_INTERVAL = 60  # seconds
+REQUEST_TIMEOUT_SECONDS = 10
+PLATFORMS: list[Platform] = [
+    Platform.BINARY_SENSOR,
+    Platform.SENSOR,
+    Platform.BUTTON,
+]
 
 
-def normalize_environment(value: Optional[str]) -> str:
+def normalize_environment(value: str | None) -> str:
     """Normalize environment strings to canonical values."""
     if value is None:
         return DEFAULT_ENVIRONMENT
@@ -35,7 +47,7 @@ def normalize_environment(value: Optional[str]) -> str:
     return candidate
 
 
-def display_environment(value: Optional[str]) -> str:
+def display_environment(value: str | None) -> str:
     """Return a user-friendly environment label."""
     normalized = normalize_environment(value)
     if normalized == DEFAULT_ENVIRONMENT:

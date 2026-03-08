@@ -1,38 +1,45 @@
+from __future__ import annotations
+
+import asyncio
 import logging
 from datetime import timedelta
-from typing import Optional
+from http import HTTPStatus
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
-import async_timeout
-
+from aiohttp import ClientError
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .const import (
-    DOMAIN,
-    UPDATE_INTERVAL,
     CONF_HASH,
     CONF_REGISTRATION_DATA,
+    DOMAIN,
+    REQUEST_TIMEOUT_SECONDS,
+    UPDATE_INTERVAL,
     normalize_environment,
 )
-from .coordinator_helpers import extract_first, normalize_forecast, normalize_periods
+from .coordinator_helpers import build_snapshot
+from .models import ForecastData, ForecastPeriod, MeshSolarSnapshot
 
 _LOGGER = logging.getLogger(__name__)
 
 
-class MeshSolarCoordinator(DataUpdateCoordinator):
+class MeshSolarCoordinator(DataUpdateCoordinator[MeshSolarSnapshot]):
+    """Fetch and normalize Mesh Solar data for the integration."""
+
     def __init__(
         self,
-        hass,
+        hass: HomeAssistant,
         entry: ConfigEntry,
-        url,
-        api_key,
-        battery_capacity_sensor,
-        environment,
-        initial_hash: Optional[str] = None,
-        initial_registration: Optional[str] = None,
-    ):
+        url: str,
+        api_key: str,
+        battery_capacity_sensor: str,
+        environment: str,
+        initial_hash: str | None = None,
+        initial_registration: str | None = None,
+    ) -> None:
         self._hass = hass
         self._entry = entry
         self._url = url
@@ -41,11 +48,8 @@ class MeshSolarCoordinator(DataUpdateCoordinator):
         self._session = async_get_clientsession(hass)
         self._last_hash = (initial_hash or "").strip()
         self._registration_data = (initial_registration or "").strip()
+        self._latest_snapshot = MeshSolarSnapshot()
         self.environment = normalize_environment(environment)
-        self._currency = ""
-        self._forecast_periods = []
-        self._forecast: dict = {}
-        self._target_capacity: Optional[float] = None
         super().__init__(
             hass,
             _LOGGER,
@@ -55,153 +59,67 @@ class MeshSolarCoordinator(DataUpdateCoordinator):
 
     @property
     def last_hash(self) -> str:
+        """Return the latest cached forecast hash."""
         return self._last_hash
 
     @property
     def registration_data(self) -> str:
+        """Return the latest cached registration data."""
         return self._registration_data
 
+    @property
+    def currency(self) -> str | None:
+        """Return the current forecast currency."""
+        return self._current_snapshot.currency
 
     @property
-    def currency(self) -> str:
-        return self._currency
+    def forecast_periods(self) -> list[ForecastPeriod]:
+        """Return normalized forecast periods."""
+        return self._current_snapshot.forecast_periods
 
     @property
-    def forecast_periods(self) -> list[dict]:
-        return self._forecast_periods
+    def forecast(self) -> ForecastData:
+        """Return the normalized forecast payload."""
+        return self._current_snapshot.forecast
 
     @property
-    def forecast(self) -> dict:
-        return self._forecast
+    def target_capacity(self) -> float | None:
+        """Return the target capacity from the current snapshot."""
+        return self._current_snapshot.target_capacity
+
+    async def _async_update_data(self) -> MeshSolarSnapshot:
+        """Fetch the latest Mesh Solar data."""
+        battery_capacity = self._current_battery_capacity()
+        request_url = self._build_request_url(battery_capacity)
+        _LOGGER.debug(
+            "Requesting Mesh Solar forecast for entry %s from %s",
+            self._entry.entry_id,
+            self._redacted_request_target(request_url),
+        )
+
+        payload = await self._fetch_payload(request_url=request_url)
+        snapshot = build_snapshot(payload)
+        self._latest_snapshot = snapshot
+
+        if self._update_cached_state(snapshot):
+            self._persist_state()
+
+        _LOGGER.debug(
+            "Fetched Mesh Solar forecast for entry %s with %s periods",
+            self._entry.entry_id,
+            len(snapshot.forecast_periods),
+        )
+        return snapshot
 
     @property
-    def target_capacity(self) -> Optional[float]:
-        return self._target_capacity
-
-    async def _async_update_data(self):
-        try:
-            headers = {"X-API-KEY": f"{self._api_key}"}
-
-            battery_state = self._hass.states.get(self._battery_capacity_sensor)
-            battery_capacity = battery_state.state if battery_state else ""
-
-            _LOGGER.info(
-                "Got entity value for %s: %s",
-                self._battery_capacity_sensor,
-                battery_capacity,
-            )
-
-            request_url = self._build_request_url(str(battery_capacity or ""))
-            _LOGGER.info("URL to be used: %s", request_url)
-
-            async with async_timeout.timeout(10):
-                async with self._session.get(
-                    request_url, headers=headers
-                ) as response:
-                    if response.status != 200:
-                        raise UpdateFailed(f"API returned {response.status}")
-
-                    data = await response.json()
-                    _LOGGER.info(repr(data))
-
-                    state_changed = False
-
-                    forecast_info = normalize_forecast(data)
-
-                    returned_hash = extract_first(
-                        data,
-                        ("hash", "Hash", "forecastHash"),
-                    )
-                    if returned_hash in (None, ""):
-                        returned_hash = forecast_info.get("hash")
-                    if returned_hash is not None:
-                        returned_hash = str(returned_hash)
-                        if returned_hash != self._last_hash:
-                            self._last_hash = returned_hash
-                            state_changed = True
-                            _LOGGER.debug("Stored new forecast hash: %s", returned_hash)
-
-                    returned_registration = extract_first(
-                        data,
-                        ("registrationData", "RegistrationData", "registration_data"),
-                    )
-                    if returned_registration in (None, ""):
-                        returned_registration = forecast_info.get("registration_data")
-                    if returned_registration is not None:
-                        returned_registration = str(returned_registration)
-                        if returned_registration != self._registration_data:
-                            self._registration_data = returned_registration
-                            state_changed = True
-                            _LOGGER.debug(
-                                "Stored new registration data: %s",
-                                returned_registration,
-                            )
-                    currency = extract_first(
-                        data,
-                        ("currency", "Currency", "currencyCode", "CurrencyCode"),
-                    )
-                    if currency is not None:
-                        currency = str(currency)
-                        if currency != self._currency:
-                            self._currency = currency
-
-                    target_capacity = extract_first(
-                        data,
-                        ("TargetCapacity", "targetCapacity", "target_capacity"),
-                    )
-                    if target_capacity in (None, ""):
-                        target_capacity = forecast_info.get("target_capacity")
-                    if target_capacity == "":
-                        self._target_capacity = None
-                    elif target_capacity is not None:
-                        new_target: Optional[float]
-                        try:
-                            new_target = float(target_capacity)
-                        except (TypeError, ValueError):
-                            new_target = None
-                        if new_target is None and isinstance(target_capacity, (int, float)):
-                            new_target = float(target_capacity)
-                        if new_target is not None:
-                            self._target_capacity = new_target
-
-
-                    if state_changed:
-                        self._persist_state()
-
-                    self._forecast = forecast_info or {}
-                    periods = forecast_info.get("periods") if forecast_info else None
-                    if not periods:
-                        periods = normalize_periods(data)
-                    self._forecast_periods = periods or []
-
-                    return data
-        except Exception as err:
-            raise UpdateFailed(f"Error fetching data: {repr(err)}")
-
-    def _build_request_url(self, battery_capacity: str) -> str:
-        parsed = urlparse(self._url)
-        query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
-        query_params["currentBatteryCapacity"] = battery_capacity
-        query_params["hash"] = self._last_hash or ""
-        query_params["registrationData"] = self._registration_data or ""
-        new_query = urlencode(query_params, doseq=True)
-        return urlunparse(parsed._replace(query=new_query))
-
-
-
-    def _persist_state(self) -> None:
-        entry_data = dict(self._entry.data)
-        updated = False
-        if entry_data.get(CONF_HASH, "") != self._last_hash:
-            entry_data[CONF_HASH] = self._last_hash
-            updated = True
-        if entry_data.get(CONF_REGISTRATION_DATA, "") != self._registration_data:
-            entry_data[CONF_REGISTRATION_DATA] = self._registration_data
-            updated = True
-        if updated:
-            self._hass.config_entries.async_update_entry(self._entry, data=entry_data)
+    def _current_snapshot(self) -> MeshSolarSnapshot:
+        """Return the freshest available snapshot."""
+        if self.data is not None:
+            return self.data
+        return self._latest_snapshot
 
     async def async_clear_registration_data(self) -> None:
+        """Clear cached registration data and refresh the coordinator."""
         if self._registration_data:
             _LOGGER.info(
                 "Clearing registration data for entry %s", self._entry.entry_id
@@ -215,9 +133,90 @@ class MeshSolarCoordinator(DataUpdateCoordinator):
         self._persist_state()
         try:
             await self.async_request_refresh()
-        except Exception as err:
+        except UpdateFailed as err:
             _LOGGER.warning(
-                "Registration data was cleared for entry %s, but refresh failed: %r",
+                "Registration data was cleared for entry %s, but refresh failed: %s",
                 self._entry.entry_id,
                 err,
             )
+
+    async def _fetch_payload(self, *, request_url: str) -> dict[str, object]:
+        headers = {"X-API-KEY": self._api_key}
+        try:
+            async with asyncio.timeout(REQUEST_TIMEOUT_SECONDS):
+                async with self._session.get(request_url, headers=headers) as response:
+                    if response.status != HTTPStatus.OK:
+                        raise UpdateFailed(f"API returned status {response.status}")
+                    payload = await response.json()
+        except TimeoutError as err:
+            raise UpdateFailed("Timed out fetching Mesh Solar data") from err
+        except ClientError as err:
+            raise UpdateFailed(f"Error communicating with Mesh Solar API: {err}") from err
+        except ValueError as err:
+            raise UpdateFailed("Mesh Solar API returned invalid JSON") from err
+
+        if not isinstance(payload, dict):
+            raise UpdateFailed("Mesh Solar API returned an unexpected payload shape")
+        return payload
+
+    def _current_battery_capacity(self) -> str:
+        battery_state = self._hass.states.get(self._battery_capacity_sensor)
+        if battery_state is None:
+            _LOGGER.debug(
+                "Battery capacity entity %s is unavailable for entry %s",
+                self._battery_capacity_sensor,
+                self._entry.entry_id,
+            )
+            return ""
+        return str(battery_state.state or "")
+
+    def _build_request_url(self, battery_capacity: str) -> str:
+        parsed = urlparse(self._url)
+        query_params = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        query_params["currentBatteryCapacity"] = battery_capacity
+        query_params["hash"] = self._last_hash
+        query_params["registrationData"] = self._registration_data
+        new_query = urlencode(query_params, doseq=True)
+        return urlunparse(parsed._replace(query=new_query))
+
+    @staticmethod
+    def _redacted_request_target(request_url: str) -> str:
+        parsed = urlparse(request_url)
+        return urlunparse(parsed._replace(params="", query="", fragment=""))
+
+    def _update_cached_state(self, snapshot: MeshSolarSnapshot) -> bool:
+        updated = False
+
+        if (
+            snapshot.forecast_hash is not None
+            and snapshot.forecast_hash != self._last_hash
+        ):
+            self._last_hash = snapshot.forecast_hash
+            updated = True
+            _LOGGER.debug("Stored new forecast hash for entry %s", self._entry.entry_id)
+
+        if (
+            snapshot.registration_data is not None
+            and snapshot.registration_data != self._registration_data
+        ):
+            self._registration_data = snapshot.registration_data
+            updated = True
+            _LOGGER.debug(
+                "Stored new registration data for entry %s", self._entry.entry_id
+            )
+
+        return updated
+
+    def _persist_state(self) -> None:
+        entry_data = dict(self._entry.data)
+        updated = False
+
+        if entry_data.get(CONF_HASH, "") != self._last_hash:
+            entry_data[CONF_HASH] = self._last_hash
+            updated = True
+        if entry_data.get(CONF_REGISTRATION_DATA, "") != self._registration_data:
+            entry_data[CONF_REGISTRATION_DATA] = self._registration_data
+            updated = True
+
+        if updated:
+            self._hass.config_entries.async_update_entry(self._entry, data=entry_data)

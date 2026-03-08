@@ -16,6 +16,7 @@ from custom_components.mesh_solar.const import (
     CONF_URL,
     DEFAULT_ENVIRONMENT,
     DOMAIN,
+    PLATFORMS,
 )
 
 
@@ -46,18 +47,16 @@ async def test_async_setup_entry_creates_coordinator_and_forwards_platforms(
     assert hass.data[DOMAIN][mock_config_entry.entry_id] is coordinator
     mock_docs.assert_awaited_once()
     mock_coordinator_class.assert_called_once_with(
-        hass,
-        mock_config_entry,
-        entry_data[CONF_URL],
-        entry_data[CONF_API_KEY],
-        entry_data[CONF_BATTERY_CAPACITY_SENSOR],
-        DEFAULT_ENVIRONMENT,
+        hass=hass,
+        entry=mock_config_entry,
+        url=entry_data[CONF_URL],
+        api_key=entry_data[CONF_API_KEY],
+        battery_capacity_sensor=entry_data[CONF_BATTERY_CAPACITY_SENSOR],
+        environment=DEFAULT_ENVIRONMENT,
         initial_hash="",
         initial_registration="",
     )
-    mock_forward.assert_awaited_once_with(
-        mock_config_entry, ["binary_sensor", "sensor", "button"]
-    )
+    mock_forward.assert_awaited_once_with(mock_config_entry, PLATFORMS)
 
 
 async def test_async_setup_entry_raises_for_missing_required_values(hass) -> None:

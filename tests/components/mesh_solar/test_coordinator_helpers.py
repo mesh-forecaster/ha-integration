@@ -1,10 +1,12 @@
 """Tests for payload normalization helpers."""
 
 from custom_components.mesh_solar.coordinator_helpers import (
+    build_snapshot,
     extract_first,
     normalize_forecast,
     normalize_periods,
 )
+from custom_components.mesh_solar.models import MeshSolarSnapshot
 
 
 def test_extract_first_handles_none_and_missing() -> None:
@@ -88,3 +90,42 @@ def test_normalize_forecast_extracts_primary_fields() -> None:
         "charging_cost": 0.45,
         "saving": 0.78,
     }
+
+
+def test_build_snapshot_prefers_normalized_shape() -> None:
+    """Coordinator snapshots expose a single normalized data model."""
+    payload = {
+        "Currency": "GBP",
+        "TargetCapacity": "55.5",
+        "Forecast": {
+            "Hash": "hash-123",
+            "RegistrationData": "reg-data",
+            "ShouldImport": False,
+            "TotalCost": "1.23",
+            "ChargingCost": "0.45",
+            "Saving": "0.78",
+            "Periods": [{"Period": 1, "Date": "2026-03-07T10:00:00+00:00"}],
+        },
+    }
+
+    assert build_snapshot(payload) == MeshSolarSnapshot(
+        forecast={
+            "hash": "hash-123",
+            "periods": [{"period": 1, "date": "2026-03-07T10:00:00+00:00"}],
+            "target_capacity": 55.5,
+            "should_import": False,
+            "registration_data": "reg-data",
+            "total_cost": 1.23,
+            "charging_cost": 0.45,
+            "saving": 0.78,
+        },
+        forecast_periods=[{"period": 1, "date": "2026-03-07T10:00:00+00:00"}],
+        currency="GBP",
+        target_capacity=55.5,
+        should_import=False,
+        total_cost=1.23,
+        charging_cost=0.45,
+        saving=0.78,
+        forecast_hash="hash-123",
+        registration_data="reg-data",
+    )

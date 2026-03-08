@@ -9,7 +9,8 @@ from unittest.mock import AsyncMock
 from homeassistant.util import dt as dt_util
 
 from custom_components.mesh_solar.button import ClearRegistrationButton
-from custom_components.mesh_solar.const import SANDBOX_ENVIRONMENT
+from custom_components.mesh_solar.const import DEFAULT_ENVIRONMENT, SANDBOX_ENVIRONMENT
+from custom_components.mesh_solar.models import MeshSolarSnapshot
 from custom_components.mesh_solar.sensors.binary import ExportSensor, ImportSensor
 from custom_components.mesh_solar.sensors.bms_state import (
     BatteryManagementSystemStateSensor,
@@ -27,12 +28,8 @@ class DummyCoordinator(SimpleNamespace):
 
 def _build_coordinator(**kwargs) -> DummyCoordinator:
     defaults = {
-        "data": {},
-        "forecast": {},
-        "forecast_periods": [],
-        "currency": None,
+        "data": MeshSolarSnapshot(),
         "last_hash": "",
-        "target_capacity": None,
         "last_update_success": True,
         "async_clear_registration_data": AsyncMock(),
     }
@@ -43,8 +40,7 @@ def _build_coordinator(**kwargs) -> DummyCoordinator:
 def test_monetary_sensor_exposes_value_currency_and_environment() -> None:
     """Monetary entity parses numeric payload values."""
     coordinator = _build_coordinator(
-        data={"TotalCost": "12.34"},
-        currency="GBP",
+        data=MeshSolarSnapshot(total_cost=12.34, currency="GBP"),
     )
 
     entity = MonetarySensor(
@@ -53,7 +49,7 @@ def test_monetary_sensor_exposes_value_currency_and_environment() -> None:
         SANDBOX_ENVIRONMENT,
         name_suffix="Total Cost",
         unique_suffix="total_cost",
-        keys=("TotalCost", "totalCost", "total_cost"),
+        value_field="total_cost",
     )
 
     assert entity.native_value == 12.34
@@ -66,7 +62,7 @@ def test_monetary_sensor_exposes_value_currency_and_environment() -> None:
 
 def test_binary_sensors_reflect_should_import_state() -> None:
     """Import/export entities mirror the upstream shouldImport flag."""
-    coordinator = _build_coordinator(data={"shouldImport": True})
+    coordinator = _build_coordinator(data=MeshSolarSnapshot(should_import=True))
 
     import_entity = ImportSensor(coordinator, "entry-1", SANDBOX_ENVIRONMENT)
     export_entity = ExportSensor(coordinator, "entry-1", SANDBOX_ENVIRONMENT)
@@ -78,16 +74,23 @@ def test_binary_sensors_reflect_should_import_state() -> None:
 def test_forecast_detail_sensor_uses_forecast_payload() -> None:
     """Diagnostic entity exposes forecast summary attributes."""
     coordinator = _build_coordinator(
-        forecast={
-            "date": "2026-03-07T10:00:00+00:00",
-            "target_capacity": 55.0,
-            "periods": [
+        data=MeshSolarSnapshot(
+            forecast={
+                "date": "2026-03-07T10:00:00+00:00",
+                "target_capacity": 55.0,
+                "periods": [
+                    {"period": 1, "date": "2026-03-07T10:00:00+00:00"},
+                    {"period": 2, "date": "2026-03-07T10:30:00+00:00"},
+                ],
+            },
+            forecast_periods=[
                 {"period": 1, "date": "2026-03-07T10:00:00+00:00"},
                 {"period": 2, "date": "2026-03-07T10:30:00+00:00"},
             ],
-        },
+            currency="GBP",
+            target_capacity=55.0,
+        ),
         last_hash="hash-1",
-        currency="GBP",
     )
 
     entity = ForecastDetailSensor(coordinator, "entry-1", SANDBOX_ENVIRONMENT)
@@ -112,8 +115,23 @@ def test_bms_sensor_uses_current_period_when_forecast_state_missing(monkeypatch)
     )
 
     coordinator = _build_coordinator(
-        forecast={
-            "periods": [
+        data=MeshSolarSnapshot(
+            forecast={
+                "periods": [
+                    {
+                        "period": 1,
+                        "date": "2026-03-07T10:00:00+00:00",
+                        "battery_management_system_state": "charging",
+                        "battery": 61.5,
+                    },
+                    {
+                        "period": 2,
+                        "date": "2026-03-07T10:30:00+00:00",
+                        "battery_management_system_state": "hold",
+                    },
+                ]
+            },
+            forecast_periods=[
                 {
                     "period": 1,
                     "date": "2026-03-07T10:00:00+00:00",
@@ -125,8 +143,8 @@ def test_bms_sensor_uses_current_period_when_forecast_state_missing(monkeypatch)
                     "date": "2026-03-07T10:30:00+00:00",
                     "battery_management_system_state": "hold",
                 },
-            ]
-        }
+            ],
+        )
     )
 
     entity = BatteryManagementSystemStateSensor(
@@ -154,3 +172,21 @@ async def test_clear_registration_button_calls_coordinator_refresh() -> None:
 
     coordinator.async_clear_registration_data.assert_awaited_once()
     assert entity.available is True
+
+
+def test_default_environment_unique_ids_include_entry_id() -> None:
+    """Default-environment entities remain unique per config entry."""
+    coordinator = _build_coordinator()
+
+    sensor = MonetarySensor(
+        coordinator,
+        "entry-1",
+        DEFAULT_ENVIRONMENT,
+        name_suffix="Total Cost",
+        unique_suffix="total_cost",
+        value_field="total_cost",
+    )
+    button = ClearRegistrationButton(coordinator, "entry-1", DEFAULT_ENVIRONMENT)
+
+    assert sensor.unique_id == "mesh_solar_entry-1_total_cost"
+    assert button.unique_id == "mesh_solar_entry-1_clear_registration"

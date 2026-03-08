@@ -8,6 +8,7 @@ from custom_components.mesh_solar.const import (
     SANDBOX_ENVIRONMENT,
 )
 from custom_components.mesh_solar.coordinator import MeshSolarCoordinator
+from custom_components.mesh_solar.models import MeshSolarSnapshot
 
 
 async def test_coordinator_updates_cached_values_from_api(
@@ -51,10 +52,35 @@ async def test_coordinator_updates_cached_values_from_api(
         },
     )
 
-    data = await coordinator._async_update_data()
+    snapshot = await coordinator._async_update_data()
     await hass.async_block_till_done()
 
-    assert data["Hash"] == "new-hash"
+    assert snapshot == MeshSolarSnapshot(
+        forecast={
+            "date": "2026-03-07T10:00:00+00:00",
+            "hash": "new-hash",
+            "periods": [
+                {
+                    "period": 1,
+                    "date": "2026-03-07T10:00:00+00:00",
+                    "battery_management_system_state": "charging",
+                }
+            ],
+            "registration_data": "new-registration",
+            "target_capacity": 57.5,
+        },
+        forecast_periods=[
+            {
+                "period": 1,
+                "date": "2026-03-07T10:00:00+00:00",
+                "battery_management_system_state": "charging",
+            }
+        ],
+        currency="GBP",
+        target_capacity=57.5,
+        forecast_hash="new-hash",
+        registration_data="new-registration",
+    )
     assert coordinator.last_hash == "new-hash"
     assert coordinator.registration_data == "new-registration"
     assert coordinator.currency == "GBP"
