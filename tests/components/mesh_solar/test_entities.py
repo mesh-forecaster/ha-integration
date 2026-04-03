@@ -15,6 +15,7 @@ from custom_components.mesh_solar.sensors.binary import ExportSensor, ImportSens
 from custom_components.mesh_solar.sensors.bms_state import (
     BatteryManagementSystemStateSensor,
 )
+from custom_components.mesh_solar.sensors.cadence import ForecastCadenceSensor
 from custom_components.mesh_solar.sensors.diagnostic import ForecastDetailSensor
 from custom_components.mesh_solar.sensors.monetary import MonetarySensor
 
@@ -29,6 +30,8 @@ class DummyCoordinator(SimpleNamespace):
 def _build_coordinator(**kwargs) -> DummyCoordinator:
     defaults = {
         "data": MeshSolarSnapshot(),
+        "forecast_cadence_minutes": None,
+        "effective_forecast_cadence_minutes": 5,
         "last_hash": "",
         "last_update_success": True,
         "async_clear_registration_data": AsyncMock(),
@@ -71,6 +74,40 @@ def test_binary_sensors_reflect_should_import_state() -> None:
     assert export_entity.is_on is False
 
 
+def test_forecast_cadence_sensor_exposes_minutes_and_environment() -> None:
+    """Cadence entity exposes the backend polling interval."""
+    coordinator = _build_coordinator(
+        data=MeshSolarSnapshot(forecast_cadence_minutes=5),
+        forecast_cadence_minutes=5,
+    )
+
+    entity = ForecastCadenceSensor(coordinator, "entry-1", SANDBOX_ENVIRONMENT)
+
+    assert entity.native_value == 5
+    assert entity.native_unit_of_measurement == "min"
+    assert entity.extra_state_attributes == {
+        "environment": SANDBOX_ENVIRONMENT,
+        "effective_poll_interval_minutes": 5,
+    }
+
+
+def test_forecast_cadence_sensor_falls_back_to_effective_interval() -> None:
+    """Cadence entity falls back to the effective polling interval."""
+    coordinator = _build_coordinator(
+        data=MeshSolarSnapshot(),
+        forecast_cadence_minutes=None,
+        effective_forecast_cadence_minutes=5,
+    )
+
+    entity = ForecastCadenceSensor(coordinator, "entry-1", SANDBOX_ENVIRONMENT)
+
+    assert entity.native_value == 5
+    assert entity.extra_state_attributes == {
+        "environment": SANDBOX_ENVIRONMENT,
+        "effective_poll_interval_minutes": 5,
+    }
+
+
 def test_forecast_detail_sensor_uses_forecast_payload() -> None:
     """Diagnostic entity exposes forecast summary attributes."""
     coordinator = _build_coordinator(
@@ -87,8 +124,15 @@ def test_forecast_detail_sensor_uses_forecast_payload() -> None:
                 {"period": 1, "date": "2026-03-07T10:00:00+00:00"},
                 {"period": 2, "date": "2026-03-07T10:30:00+00:00"},
             ],
+            registration={
+                "id": "registration-7",
+                "ForecastCadenceMinutes": 5,
+                "DynamicCharging": True,
+                "Solar": {"CapacityKw": 4.2},
+            },
             currency="GBP",
             target_capacity=55.0,
+            forecast_cadence_minutes=5,
         ),
         last_hash="hash-1",
     )
@@ -99,10 +143,21 @@ def test_forecast_detail_sensor_uses_forecast_payload() -> None:
     assert entity.native_value == 2
     assert attrs["environment"] == SANDBOX_ENVIRONMENT
     assert attrs["period_count"] == 2
-    assert attrs["forecast_hash"] == "hash-1"
-    assert attrs["forecast_date"] == "2026-03-07T10:00:00+00:00"
-    assert attrs["currency"] == "GBP"
-    assert attrs["target_capacity"] == 55.0
+    assert attrs["forecast"] == {
+        "date": "2026-03-07T10:00:00+00:00",
+        "target_capacity": 55.0,
+        "periods": [
+            {"period": 1, "date": "2026-03-07T10:00:00+00:00"},
+            {"period": 2, "date": "2026-03-07T10:30:00+00:00"},
+        ],
+    }
+    assert attrs["registration"] == {
+        "id": "registration-7",
+        "ForecastCadenceMinutes": 5,
+        "DynamicCharging": True,
+        "Solar": {"CapacityKw": 4.2},
+    }
+    assert set(attrs) == {"environment", "period_count", "forecast", "registration"}
 
 
 def test_bms_sensor_uses_current_period_when_forecast_state_missing(monkeypatch) -> None:
@@ -186,7 +241,9 @@ def test_default_environment_unique_ids_include_entry_id() -> None:
         unique_suffix="total_cost",
         value_field="total_cost",
     )
+    cadence = ForecastCadenceSensor(coordinator, "entry-1", DEFAULT_ENVIRONMENT)
     button = ClearRegistrationButton(coordinator, "entry-1", DEFAULT_ENVIRONMENT)
 
     assert sensor.unique_id == "mesh_solar_entry-1_total_cost"
+    assert cadence.unique_id == "mesh_solar_entry-1_forecast_cadence"
     assert button.unique_id == "mesh_solar_entry-1_clear_registration"

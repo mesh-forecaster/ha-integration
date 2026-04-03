@@ -43,10 +43,15 @@ class ForecastData(TypedDict, total=False):
     battery_management_system_state: str
     should_import: bool
     cloud_update_enabled: bool
+    currency: str
     registration_data: str
     total_cost: float
     charging_cost: float
     saving: float
+    forecast_cadence_minutes: int
+
+
+RegistrationData = dict[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +60,7 @@ class MeshSolarSnapshot:
 
     forecast: ForecastData = field(default_factory=dict)
     forecast_periods: list[ForecastPeriod] = field(default_factory=list)
+    registration: RegistrationData = field(default_factory=dict)
     currency: str | None = None
     target_capacity: float | None = None
     should_import: bool | None = None
@@ -63,3 +69,4 @@ class MeshSolarSnapshot:
     saving: float | None = None
     forecast_hash: str | None = None
     registration_data: str | None = None
+    forecast_cadence_minutes: int | None = None

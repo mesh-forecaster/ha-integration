@@ -7,7 +7,7 @@ When loaded, the integration publishes a local documentation page to:
 
 ## What This Integration Does
 
-- Calls your configured API every 60 seconds.
+- Calls your configured API using the current forecast cadence. The default fallback is 5 minutes until the API returns a clear-text cadence value.
 - Sends your current battery capacity, plus cached forecast `hash` and `registration_data`, to reduce payload churn.
 - Exposes import/export mode, monetary values, forecast diagnostics, and BMS state as entities.
 - Provides a `Clear Registration` button that clears cached registration data and refreshes immediately.
@@ -91,8 +91,10 @@ Each poll includes:
 
 If API returns updated hash/registration data, the integration persists them automatically.
 
+The integration does not decrypt `registrationData`. If the backend sends `registrationData` as an encrypted blob, Home Assistant can only store and forward it unchanged. Any values Home Assistant needs to read directly, such as `forecastCadenceMinutes`, must be returned unencrypted elsewhere in the API response.
+
 ## Operational Notes
 
-- Update interval: 60 seconds
+- Update interval: backend-controlled via `forecastCadenceMinutes`, with a 5-minute fallback when no clear-text cadence is available
 - Request timeout: 10 seconds
 - Initial refresh failures do not block entity creation; entities still load so registration can be cleared.

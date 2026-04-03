@@ -2,8 +2,10 @@
 
 from custom_components.mesh_solar.coordinator_helpers import (
     build_snapshot,
+    extract_forecast_cadence_minutes_from_registration_data,
     extract_first,
     normalize_forecast,
+    normalize_registration,
     normalize_periods,
 )
 from custom_components.mesh_solar.models import MeshSolarSnapshot
@@ -92,14 +94,179 @@ def test_normalize_forecast_extracts_primary_fields() -> None:
     }
 
 
+def test_normalize_registration_extracts_json_payload_from_registration_data() -> None:
+    """Registration JSON is parsed for diagnostics."""
+    payload = {
+        "RegistrationData": (
+            '{"id":"registration-7","DynamicCharging":true,'
+            '"ForecastCadenceMinutes":5,"Solar":{"CapacityKw":4.2}}'
+        )
+    }
+
+    assert normalize_registration(payload) == {
+        "id": "registration-7",
+        "DynamicCharging": True,
+        "ForecastCadenceMinutes": 5,
+        "Solar": {"CapacityKw": 4.2},
+    }
+
+
+def test_normalize_registration_accepts_top_level_registration_payload() -> None:
+    """Raw registration payloads are exposed in diagnostics."""
+    payload = {
+        "id": "registration-7",
+        "DynamicCharging": True,
+        "ForecastCadenceMinutes": 1,
+        "Solar": {"InstallationSizeKw": 3.1},
+    }
+
+    assert normalize_registration(payload) == {
+        "id": "registration-7",
+        "DynamicCharging": True,
+        "ForecastCadenceMinutes": 1,
+        "Solar": {"InstallationSizeKw": 3.1},
+    }
+
+
+def test_extract_forecast_cadence_minutes_from_registration_data() -> None:
+    """Cached registration data controls coordinator cadence."""
+    registration_data = (
+        '{"id":"registration-7","ForecastCadenceMinutes":5,"DynamicCharging":true}'
+    )
+
+    assert extract_forecast_cadence_minutes_from_registration_data(
+        registration_data
+    ) == 5
+
+
+def test_build_snapshot_accepts_top_level_registration_payload() -> None:
+    """Top-level registration payloads still populate cadence and cacheable data."""
+    payload = {
+        "id": "registration-7",
+        "DynamicCharging": True,
+        "ForecastCadenceMinutes": 1,
+        "Solar": {"InstallationSizeKw": 3.1},
+    }
+
+    assert build_snapshot(payload) == MeshSolarSnapshot(
+        forecast={
+            "id": "registration-7",
+            "forecast_cadence_minutes": 1,
+            "registration_data": (
+                '{"id":"registration-7","DynamicCharging":true,'
+                '"ForecastCadenceMinutes":1,"Solar":{"InstallationSizeKw":3.1}}'
+            ),
+        },
+        registration={
+            "id": "registration-7",
+            "DynamicCharging": True,
+            "ForecastCadenceMinutes": 1,
+            "Solar": {"InstallationSizeKw": 3.1},
+        },
+        registration_data=(
+            '{"id":"registration-7","DynamicCharging":true,'
+            '"ForecastCadenceMinutes":1,"Solar":{"InstallationSizeKw":3.1}}'
+        ),
+        forecast_cadence_minutes=1,
+    )
+
+
+def test_build_snapshot_keeps_forecast_payload_out_of_registration() -> None:
+    """Forecast payloads with clear-text cadence do not get duplicated as registration data."""
+    payload = {
+        "id": "forecast-7",
+        "registrationId": "registration-7",
+        "date": "2026-04-03T09:08:38.2671273Z",
+        "hash": "hash-7",
+        "periods": [
+            {
+                "id": "period-1",
+                "period": 18,
+                "date": "2026-04-03T09:00:00Z",
+                "price": 0.1386,
+                "shouldImport": False,
+                "amount": 0,
+                "battery": 8464,
+                "batteryManagementSystemState": 0,
+            }
+        ],
+        "currentCapacity": 9216,
+        "minCapacity": 5760,
+        "targetCapacity": 5760,
+        "batteryManagementSystemState": 0,
+        "shouldImport": False,
+        "cloudUpdateEnabled": False,
+        "forecastCadenceMinutes": 1,
+        "registrationData": "encrypted-registration-data",
+        "totalCost": 1.340718750000001,
+        "chargingCost": 0.40609296,
+        "saving": 0.9346257900000011,
+    }
+
+    assert build_snapshot(payload) == MeshSolarSnapshot(
+        forecast={
+            "id": "forecast-7",
+            "registration_id": "registration-7",
+            "date": "2026-04-03T09:08:38.2671273Z",
+            "hash": "hash-7",
+            "periods": [
+                {
+                    "id": "period-1",
+                    "period": 18,
+                    "date": "2026-04-03T09:00:00Z",
+                    "price": 0.1386,
+                    "should_import": False,
+                    "amount": 0.0,
+                    "battery": 8464.0,
+                    "battery_management_system_state": "0",
+                }
+            ],
+            "current_capacity": 9216.0,
+            "min_capacity": 5760.0,
+            "target_capacity": 5760.0,
+            "battery_management_system_state": "0",
+            "should_import": False,
+            "cloud_update_enabled": False,
+            "forecast_cadence_minutes": 1,
+            "registration_data": "encrypted-registration-data",
+            "total_cost": 1.340718750000001,
+            "charging_cost": 0.40609296,
+            "saving": 0.9346257900000011,
+        },
+        forecast_periods=[
+            {
+                "id": "period-1",
+                "period": 18,
+                "date": "2026-04-03T09:00:00Z",
+                "price": 0.1386,
+                "should_import": False,
+                "amount": 0.0,
+                "battery": 8464.0,
+                "battery_management_system_state": "0",
+            }
+        ],
+        target_capacity=5760.0,
+        should_import=False,
+        total_cost=1.340718750000001,
+        charging_cost=0.40609296,
+        saving=0.9346257900000011,
+        forecast_hash="hash-7",
+        registration_data="encrypted-registration-data",
+        forecast_cadence_minutes=1,
+    )
+
+
 def test_build_snapshot_prefers_normalized_shape() -> None:
     """Coordinator snapshots expose a single normalized data model."""
     payload = {
         "Currency": "GBP",
         "TargetCapacity": "55.5",
+        "RegistrationData": (
+            '{"id":"registration-7","DynamicCharging":true,'
+            '"ForecastCadenceMinutes":5,"Solar":{"CapacityKw":4.2}}'
+        ),
         "Forecast": {
             "Hash": "hash-123",
-            "RegistrationData": "reg-data",
             "ShouldImport": False,
             "TotalCost": "1.23",
             "ChargingCost": "0.45",
@@ -114,12 +281,22 @@ def test_build_snapshot_prefers_normalized_shape() -> None:
             "periods": [{"period": 1, "date": "2026-03-07T10:00:00+00:00"}],
             "target_capacity": 55.5,
             "should_import": False,
-            "registration_data": "reg-data",
+            "currency": "GBP",
+            "registration_data": (
+                '{"id":"registration-7","DynamicCharging":true,'
+                '"ForecastCadenceMinutes":5,"Solar":{"CapacityKw":4.2}}'
+            ),
             "total_cost": 1.23,
             "charging_cost": 0.45,
             "saving": 0.78,
         },
         forecast_periods=[{"period": 1, "date": "2026-03-07T10:00:00+00:00"}],
+        registration={
+            "id": "registration-7",
+            "DynamicCharging": True,
+            "ForecastCadenceMinutes": 5,
+            "Solar": {"CapacityKw": 4.2},
+        },
         currency="GBP",
         target_capacity=55.5,
         should_import=False,
@@ -127,5 +304,9 @@ def test_build_snapshot_prefers_normalized_shape() -> None:
         charging_cost=0.45,
         saving=0.78,
         forecast_hash="hash-123",
-        registration_data="reg-data",
+        registration_data=(
+            '{"id":"registration-7","DynamicCharging":true,'
+            '"ForecastCadenceMinutes":5,"Solar":{"CapacityKw":4.2}}'
+        ),
+        forecast_cadence_minutes=5,
     )

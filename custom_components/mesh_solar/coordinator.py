@@ -15,12 +15,15 @@ from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, Upda
 from .const import (
     CONF_HASH,
     CONF_REGISTRATION_DATA,
+    DEFAULT_FORECAST_CADENCE_MINUTES,
     DOMAIN,
     REQUEST_TIMEOUT_SECONDS,
-    UPDATE_INTERVAL,
     normalize_environment,
 )
-from .coordinator_helpers import build_snapshot
+from .coordinator_helpers import (
+    build_snapshot,
+    extract_forecast_cadence_minutes_from_registration_data,
+)
 from .models import ForecastData, ForecastPeriod, MeshSolarSnapshot
 
 _LOGGER = logging.getLogger(__name__)
@@ -48,13 +51,19 @@ class MeshSolarCoordinator(DataUpdateCoordinator[MeshSolarSnapshot]):
         self._session = async_get_clientsession(hass)
         self._last_hash = (initial_hash or "").strip()
         self._registration_data = (initial_registration or "").strip()
+        self._forecast_cadence_minutes = extract_forecast_cadence_minutes_from_registration_data(
+            self._registration_data
+        )
+        self._effective_forecast_cadence_minutes = (
+            self._forecast_cadence_minutes or DEFAULT_FORECAST_CADENCE_MINUTES
+        )
         self._latest_snapshot = MeshSolarSnapshot()
         self.environment = normalize_environment(environment)
         super().__init__(
             hass,
             _LOGGER,
             name=DOMAIN,
-            update_interval=timedelta(seconds=UPDATE_INTERVAL),
+            update_interval=timedelta(minutes=self._effective_forecast_cadence_minutes),
         )
 
     @property
@@ -66,6 +75,16 @@ class MeshSolarCoordinator(DataUpdateCoordinator[MeshSolarSnapshot]):
     def registration_data(self) -> str:
         """Return the latest cached registration data."""
         return self._registration_data
+
+    @property
+    def forecast_cadence_minutes(self) -> int | None:
+        """Return the last backend-reported polling cadence in minutes."""
+        return self._forecast_cadence_minutes
+
+    @property
+    def effective_forecast_cadence_minutes(self) -> int:
+        """Return the effective polling cadence in minutes."""
+        return self._effective_forecast_cadence_minutes
 
     @property
     def currency(self) -> str | None:
@@ -99,6 +118,8 @@ class MeshSolarCoordinator(DataUpdateCoordinator[MeshSolarSnapshot]):
 
         payload = await self._fetch_payload(request_url=request_url)
         snapshot = build_snapshot(payload)
+        if snapshot.forecast_cadence_minutes is not None:
+            self._set_forecast_cadence_minutes(snapshot.forecast_cadence_minutes)
         self._latest_snapshot = snapshot
 
         if self._update_cached_state(snapshot):
@@ -130,6 +151,7 @@ class MeshSolarCoordinator(DataUpdateCoordinator[MeshSolarSnapshot]):
             )
 
         self._registration_data = ""
+        self._reset_forecast_cadence_minutes()
         self._persist_state()
         try:
             await self.async_request_refresh()
@@ -220,3 +242,35 @@ class MeshSolarCoordinator(DataUpdateCoordinator[MeshSolarSnapshot]):
 
         if updated:
             self._hass.config_entries.async_update_entry(self._entry, data=entry_data)
+
+    def _set_forecast_cadence_minutes(self, cadence_minutes: int | None) -> None:
+        previous_effective = self._effective_forecast_cadence_minutes
+        self._forecast_cadence_minutes = cadence_minutes
+        resolved_minutes = cadence_minutes or DEFAULT_FORECAST_CADENCE_MINUTES
+        self._effective_forecast_cadence_minutes = resolved_minutes
+        if resolved_minutes == previous_effective:
+            return
+
+        self.update_interval = timedelta(minutes=resolved_minutes)
+        _LOGGER.debug(
+            "Set Mesh Solar backend polling cadence for entry %s to %s minute(s)",
+            self._entry.entry_id,
+            resolved_minutes,
+        )
+
+    def _reset_forecast_cadence_minutes(self) -> None:
+        """Reset to the default polling cadence until a backend value is known."""
+        self._forecast_cadence_minutes = None
+        previous_effective = self._effective_forecast_cadence_minutes
+        self._effective_forecast_cadence_minutes = DEFAULT_FORECAST_CADENCE_MINUTES
+        if previous_effective == self._effective_forecast_cadence_minutes:
+            return
+
+        self.update_interval = timedelta(
+            minutes=self._effective_forecast_cadence_minutes
+        )
+        _LOGGER.debug(
+            "Reset Mesh Solar backend polling cadence for entry %s to default %s minute(s)",
+            self._entry.entry_id,
+            self._effective_forecast_cadence_minutes,
+        )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from homeassistant.components.sensor import SensorEntity
 from homeassistant.helpers.entity import EntityCategory
 
@@ -54,15 +56,7 @@ class ForecastDetailSensor(MeshSolarEntity, SensorEntity):
             if periods_payload:
                 forecast["periods"] = periods_payload
             attrs["forecast"] = forecast
-
-        forecast_date = snapshot.forecast.get("date")
-        if forecast_date not in (None, ""):
-            attrs["forecast_date"] = str(forecast_date).strip()
-        if self.coordinator.last_hash:
-            attrs["forecast_hash"] = self.coordinator.last_hash
-        if snapshot.currency:
-            attrs["currency"] = snapshot.currency
-        if snapshot.target_capacity is not None:
-            attrs["target_capacity"] = snapshot.target_capacity
+        if snapshot.registration:
+            attrs["registration"] = deepcopy(snapshot.registration)
 
         return attrs

@@ -6,6 +6,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from ..const import DEFAULT_ENVIRONMENT, DOMAIN
 from ..entity_helpers import normalized_environment
+from .cadence import ForecastCadenceSensor
 from .monetary import MonetarySensor
 from .diagnostic import ForecastDetailSensor
 from .bms_state import BatteryManagementSystemStateSensor
@@ -49,6 +50,11 @@ async def async_setup_entry(
                 value_field="saving",
             ),
             ForecastDetailSensor(
+                coordinator,
+                config_entry.entry_id,
+                environment,
+            ),
+            ForecastCadenceSensor(
                 coordinator,
                 config_entry.entry_id,
                 environment,

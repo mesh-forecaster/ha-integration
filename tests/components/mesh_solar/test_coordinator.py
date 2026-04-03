@@ -1,5 +1,6 @@
 """Tests for the update coordinator."""
 
+from datetime import timedelta
 from unittest.mock import AsyncMock
 
 from custom_components.mesh_solar.const import (
@@ -28,7 +29,7 @@ async def test_coordinator_updates_cached_values_from_api(
         entry_data["battery_capacity_sensor"],
         SANDBOX_ENVIRONMENT,
         initial_hash="old-hash",
-        initial_registration="old-registration",
+        initial_registration='{"id":"registration-1","ForecastCadenceMinutes":5}',
     )
 
     url = coordinator._build_request_url("53")
@@ -36,7 +37,10 @@ async def test_coordinator_updates_cached_values_from_api(
         url,
         json={
             "Hash": "new-hash",
-            "RegistrationData": "new-registration",
+            "RegistrationData": (
+                '{"id":"registration-2","DynamicCharging":true,'
+                '"ForecastCadenceMinutes":1}'
+            ),
             "Currency": "GBP",
             "TargetCapacity": "57.5",
             "Forecast": {
@@ -66,7 +70,11 @@ async def test_coordinator_updates_cached_values_from_api(
                     "battery_management_system_state": "charging",
                 }
             ],
-            "registration_data": "new-registration",
+            "registration_data": (
+                '{"id":"registration-2","DynamicCharging":true,'
+                '"ForecastCadenceMinutes":1}'
+            ),
+            "currency": "GBP",
             "target_capacity": 57.5,
         },
         forecast_periods=[
@@ -76,15 +84,29 @@ async def test_coordinator_updates_cached_values_from_api(
                 "battery_management_system_state": "charging",
             }
         ],
+        registration={
+            "id": "registration-2",
+            "DynamicCharging": True,
+            "ForecastCadenceMinutes": 1,
+        },
         currency="GBP",
         target_capacity=57.5,
         forecast_hash="new-hash",
-        registration_data="new-registration",
+        registration_data=(
+            '{"id":"registration-2","DynamicCharging":true,'
+            '"ForecastCadenceMinutes":1}'
+        ),
+        forecast_cadence_minutes=1,
     )
     assert coordinator.last_hash == "new-hash"
-    assert coordinator.registration_data == "new-registration"
+    assert coordinator.registration_data == (
+        '{"id":"registration-2","DynamicCharging":true,"ForecastCadenceMinutes":1}'
+    )
     assert coordinator.currency == "GBP"
     assert coordinator.target_capacity == 57.5
+    assert coordinator.forecast_cadence_minutes == 1
+    assert coordinator.effective_forecast_cadence_minutes == 1
+    assert coordinator.update_interval == timedelta(minutes=1)
     assert coordinator.forecast["date"] == "2026-03-07T10:00:00+00:00"
     assert coordinator.forecast_periods == [
         {
@@ -94,7 +116,9 @@ async def test_coordinator_updates_cached_values_from_api(
         }
     ]
     assert mock_config_entry.data[CONF_HASH] == "new-hash"
-    assert mock_config_entry.data[CONF_REGISTRATION_DATA] == "new-registration"
+    assert mock_config_entry.data[CONF_REGISTRATION_DATA] == (
+        '{"id":"registration-2","DynamicCharging":true,"ForecastCadenceMinutes":1}'
+    )
 
 
 async def test_clear_registration_data_persists_and_refreshes(
@@ -111,7 +135,7 @@ async def test_clear_registration_data_persists_and_refreshes(
         entry_data["battery_capacity_sensor"],
         SANDBOX_ENVIRONMENT,
         initial_hash="existing-hash",
-        initial_registration="cached-registration",
+        initial_registration='{"id":"registration-1","ForecastCadenceMinutes":5}',
     )
     coordinator.async_request_refresh = AsyncMock()
 
@@ -119,5 +143,8 @@ async def test_clear_registration_data_persists_and_refreshes(
     await hass.async_block_till_done()
 
     assert coordinator.registration_data == ""
+    assert coordinator.forecast_cadence_minutes is None
+    assert coordinator.effective_forecast_cadence_minutes == 5
+    assert coordinator.update_interval == timedelta(minutes=5)
     assert mock_config_entry.data[CONF_REGISTRATION_DATA] == ""
     coordinator.async_request_refresh.assert_awaited_once()

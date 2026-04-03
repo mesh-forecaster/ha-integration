@@ -5,7 +5,6 @@ from typing import Literal
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
-    SensorStateClass,
 )
 
 from ..entity import MeshSolarEntity
@@ -23,7 +22,6 @@ class MonetarySensor(MeshSolarEntity, SensorEntity):
     """Expose normalized monetary values from the coordinator snapshot."""
 
     _attr_device_class = SensorDeviceClass.MONETARY
-    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(
         self,

@@ -4,8 +4,9 @@ import logging
 from pathlib import Path
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.helpers import entity_registry as er
 
 from .config_data import merged_config_data, validate_config_data
 from .const import (
@@ -15,16 +16,28 @@ from .const import (
     CONF_HASH,
     CONF_REGISTRATION_DATA,
     CONF_URL,
+    DEFAULT_ENVIRONMENT,
     DOMAIN,
     PLATFORMS,
 )
 from .coordinator import MeshSolarCoordinator
+from .entity_helpers import build_unique_id
 from .models import MeshSolarConfigData
 
 _LOGGER = logging.getLogger(__name__)
 _LOCAL_DOCS_READY_KEY = f"{DOMAIN}_local_docs_ready"
 _LOCAL_DOCS_SOURCE = "local_docs/index.html"
 _LOCAL_DOCS_TARGET = ("www", "mesh_solar", "index.html")
+_LEGACY_DEFAULT_ENVIRONMENT_ENTITY_SUFFIXES = (
+    ("sensor", "total_cost"),
+    ("sensor", "charging_cost"),
+    ("sensor", "saving"),
+    ("sensor", "forecast_diagnostics"),
+    ("sensor", "bms_state"),
+    ("binary_sensor", "import"),
+    ("binary_sensor", "export"),
+    ("button", "clear_registration"),
+)
 _ENTRY_KEYS = (
     CONF_URL,
     CONF_API_KEY,
@@ -85,6 +98,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         )
         _LOGGER.error(message)
         raise ConfigEntryNotReady(message)
+
+    _migrate_legacy_default_environment_unique_ids(
+        hass=hass,
+        entry=entry,
+        environment=config_data[CONF_ENVIRONMENT],
+    )
 
     coordinator = MeshSolarCoordinator(
         hass=hass,
@@ -147,3 +166,157 @@ def _sync_entry_data(
     hass.config_entries.async_update_entry(
         entry, data=updated_data, options=updated_options
     )
+
+
+@callback
+def _migrate_legacy_default_environment_unique_ids(
+    *,
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    environment: str,
+) -> None:
+    """Normalize live/default entities onto one canonical registry entry."""
+    if environment != DEFAULT_ENVIRONMENT:
+        return
+
+    entity_registry = er.async_get(hass)
+
+    for entity_domain, suffix in _LEGACY_DEFAULT_ENVIRONMENT_ENTITY_SUFFIXES:
+        desired_unique_id = build_unique_id(DEFAULT_ENVIRONMENT, entry.entry_id, suffix)
+        canonical_entity_id = _default_environment_entity_id(entity_domain, suffix)
+        candidates = _default_environment_entity_candidates(
+            entity_registry=entity_registry,
+            entity_domain=entity_domain,
+            suffix=suffix,
+            canonical_entity_id=canonical_entity_id,
+        )
+        if not candidates:
+            continue
+
+        target_entry = _select_default_environment_entity_candidate(
+            candidates=candidates,
+            entry_id=entry.entry_id,
+            desired_unique_id=desired_unique_id,
+            canonical_entity_id=canonical_entity_id,
+            suffix=suffix,
+        )
+
+        for candidate in candidates:
+            if candidate.entity_id == target_entry.entity_id:
+                continue
+            entity_registry.async_remove(candidate.entity_id)
+            entity_registry.deleted_entities.pop(
+                (
+                    candidate.domain,
+                    candidate.platform,
+                    candidate.unique_id,
+                ),
+                None,
+            )
+            _LOGGER.info(
+                "Removed duplicate Mesh Solar entity %s while normalizing entry %s",
+                candidate.entity_id,
+                entry.entry_id,
+            )
+
+        update_kwargs: dict[str, object] = {}
+        if target_entry.unique_id != desired_unique_id:
+            update_kwargs["new_unique_id"] = desired_unique_id
+        if target_entry.config_entry_id != entry.entry_id:
+            update_kwargs["config_entry_id"] = entry.entry_id
+        if target_entry.entity_id != canonical_entity_id:
+            update_kwargs["new_entity_id"] = canonical_entity_id
+
+        if not update_kwargs:
+            continue
+
+        entity_registry.async_update_entity(target_entry.entity_id, **update_kwargs)
+        _LOGGER.info(
+            "Normalized Mesh Solar entity %s for entry %s",
+            target_entry.entity_id,
+            entry.entry_id,
+        )
+
+
+def _legacy_default_environment_unique_id(suffix: str) -> str:
+    """Return the pre-entry-ID unique ID used by legacy live entities."""
+    return f"{DOMAIN}_{suffix}"
+
+
+def _default_environment_entity_id(entity_domain: str, suffix: str) -> str:
+    """Return the canonical entity_id for live/default-environment entities."""
+    return f"{entity_domain}.{DOMAIN}_{suffix}"
+
+
+def _is_default_environment_entity_id_variant(
+    entity_id: str,
+    canonical_entity_id: str,
+) -> bool:
+    """Return whether the entity_id is the canonical one or an auto-suffixed duplicate."""
+    if entity_id == canonical_entity_id:
+        return True
+
+    prefix = f"{canonical_entity_id}_"
+    if not entity_id.startswith(prefix):
+        return False
+
+    duplicate_suffix = entity_id.removeprefix(prefix)
+    return duplicate_suffix.isdigit()
+
+
+def _default_environment_entity_candidates(
+    *,
+    entity_registry: er.EntityRegistry,
+    entity_domain: str,
+    suffix: str,
+    canonical_entity_id: str,
+) -> list[er.RegistryEntry]:
+    """Return all live/default candidate entries for a single logical entity."""
+    legacy_unique_id = _legacy_default_environment_unique_id(suffix)
+    candidates: list[er.RegistryEntry] = []
+
+    for registry_entry in entity_registry.entities.values():
+        if registry_entry.domain != entity_domain or registry_entry.platform != DOMAIN:
+            continue
+        if _is_default_environment_entity_id_variant(
+            registry_entry.entity_id,
+            canonical_entity_id,
+        ):
+            candidates.append(registry_entry)
+            continue
+        if registry_entry.unique_id == legacy_unique_id:
+            candidates.append(registry_entry)
+
+    return candidates
+
+
+def _select_default_environment_entity_candidate(
+    *,
+    candidates: list[er.RegistryEntry],
+    entry_id: str,
+    desired_unique_id: str,
+    canonical_entity_id: str,
+    suffix: str,
+) -> er.RegistryEntry:
+    """Choose the registry entry to preserve when collapsing duplicate live entities."""
+    legacy_unique_id = _legacy_default_environment_unique_id(suffix)
+
+    for candidate in candidates:
+        if candidate.entity_id == canonical_entity_id:
+            return candidate
+    for candidate in candidates:
+        if candidate.unique_id == legacy_unique_id:
+            return candidate
+    for candidate in candidates:
+        if (
+            candidate.unique_id == desired_unique_id
+            and candidate.config_entry_id == entry_id
+        ):
+            return candidate
+    for candidate in candidates:
+        if candidate.unique_id == desired_unique_id:
+            return candidate
+    for candidate in candidates:
+        if candidate.config_entry_id == entry_id:
+            return candidate
+    return candidates[0]
