@@ -5,6 +5,29 @@ This integration polls a Mesh Solar forecast endpoint and exposes forecast-drive
 When loaded, the integration publishes a local documentation page to:
 - `/local/mesh_solar/index.html`
 
+## Installation
+
+### HACS
+
+This integration can be installed through HACS as a custom repository.
+
+[![Open your Home Assistant instance and show this repository in HACS.](https://my.home-assistant.io/badges/hacs_repository.svg)](https://my.home-assistant.io/redirect/hacs_repository/?owner=mesh-forecaster&repository=ha-integration&category=integration)
+
+1. Open HACS in Home Assistant.
+2. Go to `Integrations`.
+3. Open the menu and select `Custom repositories`.
+4. Add `https://github.com/mesh-forecaster/ha-integration`.
+5. Select `Integration` as the category.
+6. Install `Mesh Solar`.
+7. Restart Home Assistant.
+8. Go to `Settings` > `Devices & services` > `Add integration` and search for `Mesh Solar`.
+
+### Manual
+
+1. Copy `custom_components/mesh_solar` from this repository into the `custom_components` directory in your Home Assistant configuration directory.
+2. Restart Home Assistant.
+3. Go to `Settings` > `Devices & services` > `Add integration` and search for `Mesh Solar`.
+
 ## What This Integration Does
 
 - Calls your configured API using the current forecast cadence. The default fallback is 5 minutes until the API returns a clear-text cadence value.
@@ -98,3 +121,17 @@ The integration does not decrypt `registrationData`. If the backend sends `regis
 - Update interval: backend-controlled via `forecastCadenceMinutes`, with a 5-minute fallback when no clear-text cadence is available
 - Request timeout: 10 seconds
 - Initial refresh failures do not block entity creation; entities still load so registration can be cleared.
+
+## License
+
+Mesh Solar is licensed under the GNU General Public License, version 3 or later. See `LICENSE`.
+
+## Release Checklist
+
+Before publishing a HACS release:
+
+- Confirm the GitHub repository is public, has a description, has topics, and has issues enabled.
+- Run and pass the HACS validation, Hassfest, and test workflows.
+- Update `custom_components/mesh_solar/manifest.json` with the release version.
+- Create a GitHub release, not only a tag, for the same version.
+- Add a repository license before wider distribution.

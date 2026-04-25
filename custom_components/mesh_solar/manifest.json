@@ -1,7 +1,7 @@
 {
   "domain": "mesh_solar",
   "name": "Mesh Solar",
-  "codeowners": ["@mesh.forecaster"],
+  "codeowners": ["@mesh-forecaster"],
   "config_flow": true,
   "documentation": "https://github.com/mesh-forecaster/ha-integration#readme",
   "integration_type": "service",
