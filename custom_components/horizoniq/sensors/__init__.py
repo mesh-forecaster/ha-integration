@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.components.sensor import SensorEntity
@@ -9,10 +11,12 @@ from homeassistant.helpers.entity import EntityCategory
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from ..const import DEFAULT_ENVIRONMENT, DOMAIN
-from ..entity_helpers import normalized_environment, virtual_battery_device_info
+from ..entity_helpers import (
+    build_unique_id,
+    normalized_environment,
+    virtual_battery_device_info,
+)
 from ..sandbox_runtime import HorizonIQEntryRuntime
-from ..const import DOMAIN
-from ..entity_helpers import build_unique_id
 from .cadence import ForecastCadenceSensor
 from .monetary import MonetarySensor
 from .diagnostic import ForecastDetailSensor
@@ -90,13 +94,25 @@ def _sandbox_entities(
     """Return operational virtual-device entities for a configured sandbox."""
     if not runtime.is_sandbox_configured:
         return []
-    return [
+    entities: list[SensorEntity] = [
         SandboxRuntimeSensor(runtime, entry_id, "status", "Status"),
         SandboxRuntimeSensor(runtime, entry_id, "soc", "State of charge", PERCENTAGE),
         SandboxRuntimeSensor(runtime, entry_id, "energy", "Stored battery energy", UnitOfEnergy.WATT_HOUR),
         SandboxRuntimeSensor(runtime, entry_id, "battery_power", "Battery power", UnitOfPower.WATT),
         SandboxRuntimeSensor(runtime, entry_id, "grid_power", "Grid power", UnitOfPower.WATT),
-        SandboxRuntimeSensor(runtime, entry_id, "clock", "Virtual time"),
+        SandboxRuntimeSensor(
+            runtime,
+            entry_id,
+            "solar_generation",
+            "Solar generation",
+            UnitOfPower.WATT,
+        ),
+        SandboxRuntimeSensor(
+            runtime,
+            entry_id,
+            "equipment_profile",
+            "Equipment profile",
+        ),
         SandboxRuntimeSensor(runtime, entry_id, "mqtt", "MQTT health", diagnostic=True),
         SandboxRuntimeSensor(runtime, entry_id, "forecast", "Forecast health", diagnostic=True),
         SandboxRuntimeSensor(runtime, entry_id, "command", "Command status", diagnostic=True),
@@ -110,10 +126,23 @@ def _sandbox_entities(
             UnitOfEnergy.WATT_HOUR,
             diagnostic=True,
         ),
-        SandboxRuntimeSensor(runtime, entry_id, "profile_cursor", "Profile cursor", diagnostic=True),
         SandboxRuntimeSensor(runtime, entry_id, "faults", "Active faults", diagnostic=True),
         ImportForExportDecisionSensor(runtime, entry_id),
     ]
+    if runtime.operating_mode == "replay":
+        entities.extend(
+            [
+                SandboxRuntimeSensor(runtime, entry_id, "clock", "Virtual time"),
+                SandboxRuntimeSensor(
+                    runtime,
+                    entry_id,
+                    "profile_cursor",
+                    "Profile cursor",
+                    diagnostic=True,
+                ),
+            ]
+        )
+    return entities
 
 
 class SandboxRuntimeSensor(SensorEntity):
@@ -167,6 +196,10 @@ class SandboxRuntimeSensor(SensorEntity):
             return _rounded_number(self._runtime.battery_power_w)
         if self._key == "grid_power":
             return _rounded_number(self._runtime.grid_power_w)
+        if self._key == "solar_generation":
+            return _rounded_number(self._runtime.solar_w)
+        if self._key == "equipment_profile":
+            return self._runtime.equipment_profile_name
         if self._key == "clock":
             virtual_time = self._runtime.virtual_time_utc
             return virtual_time.isoformat() if virtual_time is not None else None
@@ -199,6 +232,15 @@ class SandboxRuntimeSensor(SensorEntity):
             "time_source": self._runtime.time_source,
             "charging_source": self._runtime.charging_source,
             "active_setpoint_w": _rounded_number(self._runtime.active_setpoint_w),
+            "solar_source": self._runtime.solar_source,
+            "forecast_solar_period_start": _isoformat(
+                self._runtime.forecast_solar_period_start_utc
+            ),
+            "forecast_solar_generation_wh": _rounded_number(
+                self._runtime.forecast_solar_generation_wh
+            ),
+            "forecast_solar_reason": self._runtime.forecast_solar_reason,
+            "effective_solar_w": _rounded_number(self._runtime.solar_w),
             "active_action": self._runtime.selected_direct_action,
             "expected_import_kwh": _rounded_number(
                 self._runtime.expected_direct_import_kwh
@@ -258,6 +300,11 @@ def _friendly_state(value: str | None) -> str | None:
 def _rounded_number(value: float | None) -> float | None:
     """Return a stable, readable number for a Home Assistant state."""
     return round(value, 2) if value is not None else None
+
+
+def _isoformat(value: datetime | None) -> str | None:
+    """Return a compact timestamp only for the selected forecast period."""
+    return value.isoformat() if value is not None else None
 
 
 def _friendly_fault_diagnostic(value: str) -> str:

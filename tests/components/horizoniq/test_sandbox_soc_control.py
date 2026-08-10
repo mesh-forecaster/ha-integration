@@ -112,21 +112,32 @@ def _assert_virtual_entities_are_available(hass, entry_id: str) -> None:
             "fault_clear",
         ),
     }
-    replay_only = {
+    absent_in_virtual = {
         ("sensor", "clock"),
+        ("sensor", "profile_cursor"),
+        ("number", "solar_w"),
         ("switch", "profile_playback"),
         ("select", "clock_rate"),
         ("select", "profile"),
+        ("select", "scenario"),
+        ("select", "equipment_profile"),
         ("button", "simulation_step"),
         ("button", "profile_reset"),
     }
     for domain, suffixes in entity_suffixes.items():
         for suffix in suffixes:
+            if (domain, suffix) in absent_in_virtual:
+                assert (
+                    er.async_get(hass).async_get_entity_id(
+                        domain,
+                        DOMAIN,
+                        build_unique_id(SANDBOX_ENVIRONMENT, entry_id, suffix),
+                    )
+                    is None
+                )
+                continue
             entity_id = _entity_id(hass, domain, entry_id, suffix)
-            if (domain, suffix) in replay_only:
-                assert hass.states.get(entity_id).state == STATE_UNAVAILABLE
-            else:
-                assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
+            assert hass.states.get(entity_id).state != STATE_UNAVAILABLE
 
 
 @pytest.mark.asyncio

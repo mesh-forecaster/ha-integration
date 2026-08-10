@@ -21,12 +21,12 @@ async def async_setup_entry(
     """Set up the entry-local sandbox enable control when configured."""
     runtime: HorizonIQEntryRuntime = hass.data[DOMAIN][config_entry.entry_id]
     if runtime.is_sandbox_configured:
-        async_add_entities(
-            [
-                SandboxEnableSwitch(runtime, config_entry.entry_id),
-                SandboxProfilePlaybackSwitch(runtime, config_entry.entry_id),
-            ]
-        )
+        entities: list[SwitchEntity] = [
+            SandboxEnableSwitch(runtime, config_entry.entry_id)
+        ]
+        if runtime.operating_mode == "replay":
+            entities.append(SandboxProfilePlaybackSwitch(runtime, config_entry.entry_id))
+        async_add_entities(entities)
 
 
 class SandboxEnableSwitch(SwitchEntity):

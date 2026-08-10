@@ -27,17 +27,21 @@ async def async_setup_entry(
     """Set up the entry-local virtual-clock rate control."""
     runtime: HorizonIQEntryRuntime = hass.data[DOMAIN][config_entry.entry_id]
     if runtime.is_sandbox_configured:
-        async_add_entities(
-            [
-                SandboxClockRateSelect(runtime, config_entry.entry_id),
-                SandboxProfileSelect(runtime, config_entry.entry_id),
-                SandboxScenarioSelect(runtime, config_entry.entry_id),
-                SandboxEquipmentProfileSelect(runtime, config_entry.entry_id),
-                SandboxOperatingModeSelect(runtime, config_entry.entry_id),
-                SandboxChargingSourceSelect(runtime, config_entry.entry_id),
-                SandboxFaultKindSelect(runtime, config_entry.entry_id),
-            ]
-        )
+        entities: list[SelectEntity] = [
+            SandboxOperatingModeSelect(runtime, config_entry.entry_id),
+            SandboxFaultKindSelect(runtime, config_entry.entry_id),
+        ]
+        if runtime.operating_mode == "virtual":
+            entities.append(SandboxChargingSourceSelect(runtime, config_entry.entry_id))
+        else:
+            entities.extend(
+                [
+                    SandboxClockRateSelect(runtime, config_entry.entry_id),
+                    SandboxProfileSelect(runtime, config_entry.entry_id),
+                    SandboxScenarioSelect(runtime, config_entry.entry_id),
+                ]
+            )
+        async_add_entities(entities)
 
 
 class _SandboxSelect(SelectEntity):

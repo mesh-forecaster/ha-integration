@@ -14,7 +14,12 @@ from .forecast_schema5 import (
     Schema5ForecastError,
     parse_schema5_forecast,
 )
-from .models import DirectEquipmentProfile, DirectForecastPeriod, Forecast
+from .models import (
+    MAX_FORECAST_PERIOD_ENERGY_WH,
+    DirectEquipmentProfile,
+    DirectForecastPeriod,
+    Forecast,
+)
 from .simulation.models import BatteryConfig, Command, OperatingMode
 
 
@@ -188,7 +193,15 @@ def _rejection_code(message: str) -> DirectForecastRejection:
         return DirectForecastRejection.COMMAND_WINDOW_INVALID
     if "capability" in message or "unsupported" in message:
         return DirectForecastRejection.CAPABILITY_INVALID
-    if any(field in message for field in ("expected", "decisionTrace", "recommendedAction")):
+    if any(
+        field in message
+        for field in (
+            "expected",
+            "estimatedGeneration",
+            "decisionTrace",
+            "recommendedAction",
+        )
+    ):
         return DirectForecastRejection.PERIOD_DATA_INVALID
     return DirectForecastRejection.OTHER_INVALID
 
@@ -247,6 +260,17 @@ def _validate_direct_period_diagnostics(period: DirectForecastPeriod) -> None:
     _text(period.recommended_action, "recommendedAction")
 
 
+def validate_period_generation(period: DirectForecastPeriod) -> float:
+    """Return the safe Wh solar estimate associated with a direct period."""
+    generation = period.estimated_generation_wh
+    if not (
+        math.isfinite(generation)
+        and 0 <= generation <= MAX_FORECAST_PERIOD_ENERGY_WH
+    ):
+        raise ValueError("estimatedGeneration is invalid")
+    return generation
+
+
 def _direct_capability(profile: DirectEquipmentProfile, action: str) -> bool:
     return {
         "charge_required": profile.required_charging,
@@ -273,6 +297,7 @@ def parse_virtual_recommendation(
     if forecast.created_at_utc > now_utc or forecast.effective_at_utc > now_utc:
         raise ValueError("Forecast is stale or not yet effective")
     period = _current_direct_period(forecast, now_utc)
+    validate_period_generation(period)
     if period.simulation_action != "none":
         raise ValueError("Live forecast includes a simulation action")
     _validate_direct_period_diagnostics(period)

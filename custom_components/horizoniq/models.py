@@ -6,6 +6,8 @@ from typing import TypedDict
 
 from .forecast_schema5 import Schema5Forecast
 
+MAX_FORECAST_PERIOD_ENERGY_WH = 2_000_000.0
+
 
 class HorizonIQConfigData(TypedDict):
     """Stored config entry values for HorizonIQ."""
@@ -95,6 +97,7 @@ class DirectForecastPeriod:
     expected_start_soc_kwh: float | None
     expected_end_soc_kwh: float | None
     decision_trace: dict[str, object] | None
+    estimated_generation_wh: float
     should_export: bool | None = None
 
 

@@ -4,6 +4,7 @@ import json
 from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -167,6 +168,55 @@ async def test_virtual_wall_clock_accepts_current_action_despite_stale_replay_cl
     assert runtime.energy_wh is not None and runtime.energy_wh > 5_000
 
 
+async def test_virtual_forecast_generation_becomes_effective_solar_without_backfill() -> None:
+    """A current period's Wh estimate supplies Virtual solar only going forward."""
+    forecast = _forecast()
+    period = replace(forecast.periods[0], estimated_generation_wh=500)
+    forecast = replace(forecast, periods=(period,))
+    runtime, _, _ = _runtime(forecast)
+    before = runtime.energy_wh
+
+    await runtime._async_stage_direct_forecast(forecast)
+
+    assert runtime.solar_w == 1_000
+    assert runtime.energy_wh == before
+    assert runtime.forecast_solar_period_start_utc == NOW
+    assert runtime.forecast_solar_generation_wh == 500
+
+
+async def test_virtual_forecast_solar_reselects_at_the_half_hour_boundary() -> None:
+    """A cached plan changes solar at its next period without another fetch."""
+    forecast = _forecast()
+    first = replace(forecast.periods[0], estimated_generation_wh=500)
+    second = replace(
+        first,
+        starts_at_utc=NOW + timedelta(minutes=30),
+        estimated_generation_wh=0,
+    )
+    forecast = replace(forecast, periods=(first, second))
+    runtime, _, _ = _runtime(forecast)
+
+    await runtime._async_stage_direct_forecast(forecast)
+    runtime._update_forecast_solar(NOW + timedelta(minutes=30))
+
+    assert runtime.solar_w == 0
+    assert runtime.forecast_solar_period_start_utc == NOW + timedelta(minutes=30)
+
+
+async def test_invalid_virtual_forecast_generation_clears_previous_solar() -> None:
+    """An invalid period follows the safe forecast path rather than retaining sun."""
+    forecast = _forecast()
+    valid = replace(forecast.periods[0], estimated_generation_wh=500)
+    invalid = replace(valid, estimated_generation_wh=float("inf"))
+    runtime, _, _ = _runtime(forecast)
+
+    await runtime._async_stage_direct_forecast(replace(forecast, periods=(valid,)))
+    await runtime._async_stage_direct_forecast(replace(forecast, periods=(invalid,)))
+
+    assert runtime.solar_w == 0
+    assert runtime.forecast_solar_reason == "forecast_solar_unavailable"
+
+
 async def test_repeated_current_command_id_keeps_virtual_charging() -> None:
     """A cadence refresh with the same active command must not interrupt charging."""
     forecast = _forecast()
@@ -280,6 +330,18 @@ async def test_mode_transitions_preserve_energy_and_clear_only_mode_owned_state(
     assert runtime._command is not None
     assert runtime._command.mode is OperatingMode.SELF_CONSUMPTION
     assert runtime.clock_rate == ClockRate.PAUSED.value
+
+
+async def test_mode_transition_reloads_only_the_owning_entry() -> None:
+    """A persisted mode selection recreates this entry's mode-specific controls."""
+    runtime, _, hass = _runtime()
+    reload_entry = AsyncMock()
+    hass.config_entries = SimpleNamespace(async_reload=reload_entry)
+
+    await runtime.async_select_operating_mode("replay")
+
+    reload_entry.assert_awaited_once_with(runtime.entry_id)
+    assert runtime.simulator_enabled is False
 
 
 def test_virtual_hides_replay_only_entities() -> None:

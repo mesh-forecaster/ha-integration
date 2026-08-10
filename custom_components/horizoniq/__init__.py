@@ -247,6 +247,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     await runtime.async_restore_storage(hass)
     await coordinator.async_refresh()
 
+    _async_remove_stale_sandbox_entities(hass=hass, entry=entry, runtime=runtime)
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
     return True
 
@@ -268,6 +269,45 @@ def _async_ensure_sandbox_device(
         manufacturer="HorizonIQ",
         model="Sandbox virtual battery",
     )
+
+
+def _async_remove_stale_sandbox_entities(
+    *, hass: HomeAssistant, entry: ConfigEntry, runtime: HorizonIQEntryRuntime
+) -> None:
+    """Remove controls excluded by the restored mode before platforms reload."""
+    if not runtime.is_sandbox_configured:
+        return
+    stale: set[tuple[str, str]] = {
+        ("number", build_unique_id("Sandbox", entry.entry_id, "solar_w")),
+        ("select", build_unique_id("Sandbox", entry.entry_id, "equipment_profile")),
+    }
+    if runtime.operating_mode == "virtual":
+        stale.update(
+            {
+                ("sensor", build_unique_id("Sandbox", entry.entry_id, "clock")),
+                ("sensor", build_unique_id("Sandbox", entry.entry_id, "profile_cursor")),
+                ("select", build_unique_id("Sandbox", entry.entry_id, "clock_rate")),
+                ("select", build_unique_id("Sandbox", entry.entry_id, "profile")),
+                ("select", build_unique_id("Sandbox", entry.entry_id, "scenario")),
+                ("switch", build_unique_id("Sandbox", entry.entry_id, "profile_playback")),
+                ("button", build_unique_id("Sandbox", entry.entry_id, "simulation_step")),
+                ("button", build_unique_id("Sandbox", entry.entry_id, "profile_reset")),
+            }
+        )
+    else:
+        stale.update(
+            {
+                ("number", build_unique_id("Sandbox", entry.entry_id, "load_w")),
+                ("select", build_unique_id("Sandbox", entry.entry_id, "charging_source")),
+            }
+        )
+    registry = er.async_get(hass)
+    for registry_entry in tuple(registry.entities.values()):
+        if (
+            registry_entry.config_entry_id == entry.entry_id
+            and (registry_entry.domain, registry_entry.unique_id) in stale
+        ):
+            registry.async_remove(registry_entry.entity_id)
 
 
 async def async_unload_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:

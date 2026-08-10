@@ -95,6 +95,7 @@ from .simulation.command_lifecycle import (
 from .direct_control import (
     DirectForecastRejection,
     parse_replay_command,
+    validate_period_generation,
     validate_virtual_recommendation,
 )
 from .models import DirectForecastPeriod, Forecast
@@ -449,6 +450,9 @@ class HorizonIQEntryRuntime:
     _virtual_next_refresh_monotonic: float | None = None
     _virtual_timing_diagnostic: str | None = None
     _virtual_refresh_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    _forecast_solar_reason: str | None = None
+    _forecast_solar_period_start_utc: datetime | None = None
+    _forecast_solar_generation_wh: float | None = None
 
     @property
     def is_sandbox_configured(self) -> bool:
@@ -586,6 +590,26 @@ class HorizonIQEntryRuntime:
         """Return the current bounded planned export for local diagnostics."""
         period = self._current_direct_forecast_period()
         return period.expected_export_kwh if period is not None else None
+
+    @property
+    def solar_source(self) -> str:
+        """Return the only source currently allowed to supply solar input."""
+        return "forecast" if self._operating_mode == "virtual" else "replay"
+
+    @property
+    def forecast_solar_reason(self) -> str | None:
+        """Return the bounded reason when Virtual forecast solar is zeroed."""
+        return self._forecast_solar_reason
+
+    @property
+    def forecast_solar_period_start_utc(self) -> datetime | None:
+        """Return the selected forecast period start without exposing the plan."""
+        return self._forecast_solar_period_start_utc
+
+    @property
+    def forecast_solar_generation_wh(self) -> float | None:
+        """Return selected planned solar energy for bounded diagnostics."""
+        return self._forecast_solar_generation_wh
 
     @property
     def virtual_time_utc(self) -> datetime | None:
@@ -835,16 +859,18 @@ class HorizonIQEntryRuntime:
         self._notify_listeners()
 
     async def async_select_operating_mode(self, mode: str) -> None:
-        """Switch one sandbox between wall-clock Virtual and deterministic Replay."""
+        """Persist a mode change, stop this runtime, then reload its entry."""
         if mode not in _OPERATING_MODES:
             raise ValueError("Sandbox operating mode is invalid")
         if mode == self._operating_mode:
             return
+        hass = self._hass
         wall_now = self._runtime_now_utc()
-        previous_mode = self._operating_mode
         was_enabled = self.simulator_enabled
         self._operating_mode = mode
         self._cancel_active_control()
+        self.solar_w = 0.0
+        self._clear_forecast_solar_diagnostics()
         if mode == "replay":
             # External instructions are meaningful only while Virtual mode
             # owns the wall-clock physics loop.
@@ -866,22 +892,24 @@ class HorizonIQEntryRuntime:
                 self._clock.reset(wall_now)
                 self._clock.set_rate(ClockRate.PAUSED)
         self._playback_state = "stopped"
-        if previous_mode == "virtual" and mode == "replay" and was_enabled:
-            # Replay is deliberate and deterministic. Never carry a running
-            # wall-clock simulator into it.
+        if was_enabled:
+            # A reload must always begin paused, regardless of the direction
+            # of the mode transition.
             await self.async_disable()
-        if (
-            mode == "virtual"
-            and self.simulator_enabled
-            and self._hass is not None
-            and previous_mode != mode
-        ):
-            await self._async_refresh_direct_forecast()
         await self.async_checkpoint(immediate=True)
         self._notify_listeners()
+        if hass is not None:
+            config_entries = getattr(hass, "config_entries", None)
+            reload_entry = getattr(config_entries, "async_reload", None)
+            get_entry = getattr(config_entries, "async_get_entry", None)
+            entry_is_registered = not callable(get_entry) or get_entry(self.entry_id)
+            if callable(reload_entry) and entry_is_registered:
+                await reload_entry(self.entry_id)
 
     async def async_select_charging_source(self, source: str) -> None:
         """Select the sole local owner allowed to supply virtual battery power."""
+        if self._operating_mode != "virtual":
+            raise ValueError("Charging source is available only in Virtual mode")
         if source not in _CHARGING_SOURCES:
             raise ValueError("Sandbox charging source is invalid")
         if source == self._charging_source:
@@ -1011,6 +1039,38 @@ class HorizonIQEntryRuntime:
         self._replay_auto_resume_pending = False
         self._prepared_replay_request = None
 
+    def _clear_forecast_solar_diagnostics(self) -> None:
+        """Forget only the transient forecast-to-solar selection state."""
+        self._forecast_solar_reason = None
+        self._forecast_solar_period_start_utc = None
+        self._forecast_solar_generation_wh = None
+
+    def _clear_forecast_solar(self, reason: str | None = None) -> None:
+        """Ensure Virtual mode can never retain a solar value across a gap."""
+        if self._operating_mode == "virtual":
+            self.solar_w = 0.0
+        self._forecast_solar_reason = reason
+        self._forecast_solar_period_start_utc = None
+        self._forecast_solar_generation_wh = None
+
+    def _update_forecast_solar(self, now_utc: datetime) -> None:
+        """Select the current period's forecast solar without advancing physics."""
+        if self._operating_mode != "virtual":
+            return
+        period = self._current_direct_forecast_period(now_utc)
+        if period is None:
+            self._clear_forecast_solar("forecast_solar_unavailable")
+            return
+        try:
+            generation_wh = validate_period_generation(period)
+        except ValueError:
+            self._clear_forecast_solar("forecast_solar_unavailable")
+            return
+        self.solar_w = generation_wh * 2.0
+        self._forecast_solar_reason = None
+        self._forecast_solar_period_start_utc = period.starts_at_utc
+        self._forecast_solar_generation_wh = generation_wh
+
     def _validated_operating_configuration(
         self, record_value: object
     ) -> tuple[str, str]:
@@ -1084,6 +1144,10 @@ class HorizonIQEntryRuntime:
             self._clear_pending_command()
             self._reset_node_red_status()
             if operating_mode == "virtual":
+                # Forecast solar is derived from the active period and must
+                # never resume from a persisted manual/replay sample.
+                self.solar_w = 0.0
+                self._clear_forecast_solar_diagnostics()
                 self._command = Command(OperatingMode.SELF_CONSUMPTION)
                 self._last_direct_command_id = None
                 self._last_direct_action = None
@@ -2390,6 +2454,8 @@ class HorizonIQEntryRuntime:
         self._last_direct_command_id = None
         self._last_direct_action = None
         self._staged_direct_forecast = None
+        self.solar_w = 0.0
+        self._clear_forecast_solar_diagnostics()
         self._freeze_fault_durations()
         self._cancel_all_fault_work()
         self._mqtt_fault_disconnected = False
@@ -2688,6 +2754,7 @@ class HorizonIQEntryRuntime:
         if elapsed_seconds > _VIRTUAL_TIMING_GAP_SECONDS:
             self._virtual_timing_diagnostic = "virtual_timing_gap"
             now_utc = self._runtime_now_utc()
+            self._update_forecast_solar(now_utc)
             if (
                 self._command is not None
                 and self._command.expires_at_utc is not None
@@ -2700,6 +2767,7 @@ class HorizonIQEntryRuntime:
             self._notify_listeners()
             return
         await self._async_refresh_virtual_if_due(now_monotonic)
+        self._update_forecast_solar(self._runtime_now_utc())
         await self._async_simulate_virtual_elapsed(
             elapsed_seconds,
             self._runtime_now_utc(),
@@ -2723,6 +2791,7 @@ class HorizonIQEntryRuntime:
         start_time = end_time - timedelta(seconds=elapsed_seconds)
         current_time = start_time
         while current_time < end_time:
+            self._update_forecast_solar(current_time)
             segment_seconds = min(
                 _VIRTUAL_PHYSICS_CHUNK_SECONDS,
                 (end_time - current_time).total_seconds(),
@@ -2730,6 +2799,7 @@ class HorizonIQEntryRuntime:
             for boundary in (
                 self._command.expires_at_utc if self._command is not None else None,
                 self._external_power_expires_at_utc,
+                self._forecast_solar_boundary(current_time),
             ):
                 if boundary is not None and current_time < boundary < current_time + timedelta(seconds=segment_seconds):
                     segment_seconds = (boundary - current_time).total_seconds()
@@ -2743,6 +2813,13 @@ class HorizonIQEntryRuntime:
                 self.solar_w,
                 hass=hass,
             )
+
+    def _forecast_solar_boundary(self, current_time: datetime) -> datetime | None:
+        """Return the next selected half-hour boundary for Virtual physics."""
+        period = self._current_direct_forecast_period(current_time)
+        if period is None:
+            return None
+        return period.starts_at_utc + timedelta(minutes=30)
 
     async def _async_simulate(
         self,
@@ -3006,6 +3083,8 @@ class HorizonIQEntryRuntime:
             ):
                 return
             if forecast is None:
+                self._staged_direct_forecast = None
+                self._clear_forecast_solar("forecast_solar_unavailable")
                 self._command = None
                 self._last_direct_action = None
                 self.last_command_status = CommandStatus.FALLBACK_MISSING
@@ -3017,6 +3096,7 @@ class HorizonIQEntryRuntime:
             live_now_utc = self._runtime_now_utc()
             if self._charging_source == "external":
                 self._staged_direct_forecast = forecast
+                self._update_forecast_solar(live_now_utc)
                 self._command = Command(OperatingMode.SELF_CONSUMPTION)
                 self._last_direct_command_id = None
                 self._last_direct_action = None
@@ -3033,6 +3113,8 @@ class HorizonIQEntryRuntime:
             )
             if not validation.is_valid:
                 rejection = validation.rejection or DirectForecastRejection.OTHER_INVALID
+                self._staged_direct_forecast = None
+                self._clear_forecast_solar("forecast_solar_unavailable")
                 self._command = Command(OperatingMode.SELF_CONSUMPTION)
                 self._last_direct_action = None
                 self.last_command_status = CommandStatus.FALLBACK_INVALID
@@ -3050,6 +3132,7 @@ class HorizonIQEntryRuntime:
                 direct = validation.command
                 assert direct is not None
                 self._staged_direct_forecast = forecast
+                self._update_forecast_solar(live_now_utc)
                 if direct.command_id is None:
                     self._command = direct.command
                     self._last_direct_command_id = None
@@ -3094,6 +3177,8 @@ class HorizonIQEntryRuntime:
                     self.last_command_reason = direct.action
                     self._direct_forecast_health = "healthy"
             except Exception as err:
+                self._staged_direct_forecast = None
+                self._clear_forecast_solar("forecast_solar_unavailable")
                 self._command = Command(OperatingMode.SELF_CONSUMPTION)
                 self._last_direct_action = None
                 self.last_command_status = CommandStatus.FALLBACK_INVALID
@@ -3113,12 +3198,14 @@ class HorizonIQEntryRuntime:
             for period in self._staged_direct_forecast.periods
         )
 
-    def _current_direct_forecast_period(self) -> DirectForecastPeriod | None:
+    def _current_direct_forecast_period(
+        self, now_utc: datetime | None = None
+    ) -> DirectForecastPeriod | None:
         """Return the current typed period solely for bounded diagnostics."""
         forecast = self._staged_direct_forecast
         if forecast is None:
             return None
-        now_utc = self._runtime_now_utc()
+        now_utc = self._runtime_now_utc() if now_utc is None else now_utc
         return next(
             (
                 period

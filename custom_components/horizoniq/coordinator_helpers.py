@@ -12,6 +12,7 @@ from .models import (
     ForecastPeriod,
     DirectEquipmentProfile,
     DirectForecastPeriod,
+    MAX_FORECAST_PERIOD_ENERGY_WH,
     EquipmentProfile,
     HorizonIQSnapshot,
     RegistrationData,
@@ -525,6 +526,9 @@ def _normalize_direct_period(source: ForecastPeriod) -> DirectForecastPeriod:
             if isinstance(source.get("decision_trace"), Mapping)
             else None
         ),
+        estimated_generation_wh=_direct_forecast_generation(
+            source.get("estimated_generation")
+        ),
         should_export=_direct_optional_bool(source.get("should_export")),
     )
 
@@ -568,6 +572,14 @@ def _direct_float(value: object, name: str) -> float:
 
 def _direct_optional_float(value: object) -> float | None:
     return _direct_float(value, "value") if value is not None else None
+
+
+def _direct_forecast_generation(value: object) -> float:
+    """Require one bounded Wh generation estimate for every direct period."""
+    generation = _direct_float(value, "estimated_generation")
+    if not 0 <= generation <= MAX_FORECAST_PERIOD_ENERGY_WH:
+        raise ValueError("estimated_generation")
+    return generation
 
 
 def _direct_bool(value: object, name: str) -> bool:

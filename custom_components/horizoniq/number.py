@@ -34,7 +34,6 @@ class _ControlDescription:
 
 _CONTROLS = (
     _ControlDescription("load_w", "Load", 0, MAX_ABSOLUTE_POWER_W, 10, UnitOfPower.WATT),
-    _ControlDescription("solar_w", "Solar generation", 0, MAX_ABSOLUTE_POWER_W, 10, UnitOfPower.WATT),
     _ControlDescription("capacity_wh", "Battery capacity", 1, MAX_BATTERY_ENERGY_WH, 10, UnitOfEnergy.WATT_HOUR),
     _ControlDescription("reserve_wh", "Battery reserve", 0, MAX_BATTERY_ENERGY_WH, 10, UnitOfEnergy.WATT_HOUR),
     _ControlDescription("max_charge_power_w", "Charge limit", 0, MAX_ABSOLUTE_POWER_W, 10, UnitOfPower.WATT),
@@ -62,8 +61,14 @@ async def async_setup_entry(
     """Set up writable controls for one virtual battery."""
     runtime: HorizonIQEntryRuntime = hass.data[DOMAIN][config_entry.entry_id]
     if runtime.is_sandbox_configured:
+        controls = (
+            _CONTROLS if runtime.operating_mode == "virtual" else _CONTROLS[1:]
+        )
         async_add_entities(
-            [SandboxNumber(runtime, config_entry.entry_id, description) for description in _CONTROLS]
+            [
+                SandboxNumber(runtime, config_entry.entry_id, description)
+                for description in controls
+            ]
         )
 
 
@@ -110,8 +115,6 @@ class SandboxNumber(NumberEntity):
             return round(soc_percent, 1) if soc_percent is not None else None
         if key == "load_w":
             return round(self._runtime.load_w, 1)
-        if key == "solar_w":
-            return round(self._runtime.solar_w, 1)
         value = getattr(self._runtime, key)
         if value is None:
             return None
@@ -136,10 +139,10 @@ class SandboxNumber(NumberEntity):
         if key == "set_state_of_charge":
             await self._runtime.async_set_state_of_charge(value)
             return
-        if key in {"load_w", "solar_w"}:
+        if key == "load_w":
             await self._runtime.async_set_inputs(
-                load_w=value if key == "load_w" else self._runtime.load_w,
-                solar_w=value if key == "solar_w" else self._runtime.solar_w,
+                load_w=value,
+                solar_w=self._runtime.solar_w,
             )
             return
         await self._runtime.async_set_control_value(

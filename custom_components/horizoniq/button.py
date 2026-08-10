@@ -38,14 +38,19 @@ async def async_setup_entry(
     if runtime.is_sandbox_configured:
         entities.extend(
             [
-                SandboxStepButton(runtime, config_entry.entry_id),
                 SandboxResetButton(runtime, config_entry.entry_id),
-                SandboxResetProfileButton(runtime, config_entry.entry_id),
                 SandboxSaveSnapshotButton(runtime, config_entry.entry_id),
                 SandboxInjectFaultButton(runtime, config_entry.entry_id),
                 SandboxClearFaultsButton(runtime, config_entry.entry_id),
             ]
         )
+        if runtime.operating_mode == "replay":
+            entities.extend(
+                [
+                    SandboxStepButton(runtime, config_entry.entry_id),
+                    SandboxResetProfileButton(runtime, config_entry.entry_id),
+                ]
+            )
     async_add_entities(entities)
 
 
